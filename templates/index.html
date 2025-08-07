@@ -402,6 +402,7 @@
             <button id="run-system-test" class="btn btn-blue">Run System Test</button>
             <button id="refresh-log" class="btn btn-blue">Refresh App Log</button>
             <button id="refresh-mediamtx-log" class="btn btn-blue">MediaMTX Logs</button>
+            <button id="check-updates" class="btn btn-green">Check for Updates</button>
         </div>
         
         <h3 class="font-bold mb-2">Test Results:</h3>
@@ -613,6 +614,63 @@ $(document).ready(function() {
             logViewer.text(data.log || "MediaMTX log is empty.");
             // Scroll to the bottom
             logViewer.scrollTop(logViewer[0].scrollHeight);
+        });
+    });
+
+    // Update functionality
+    $('#check-updates').click(function() {
+        const button = $(this);
+        const originalText = button.text();
+        
+        button.text('Checking...').prop('disabled', true);
+        
+        $.ajax({
+            url: "/api/update",
+            type: "POST",
+            success: function(data) {
+                if (data.status === 'up_to_date') {
+                    alert(`✅ Application is up to date!\n\nCurrent: ${data.current_commit}\nLatest: ${data.latest_commit}`);
+                } else if (data.status === 'success') {
+                    const message = `✅ Update successful!\n\n` +
+                        `Updated ${data.updated_files.length} files:\n` +
+                        `${data.updated_files.join('\n')}\n\n` +
+                        `Latest commit: ${data.latest_commit}\n` +
+                        `Message: ${data.commit_message}\n\n` +
+                        `Backup created at: ${data.backup_location}\n\n` +
+                        `${data.restart_attempted ? 'Service restart attempted.' : data.restart_note}`;
+                    
+                    alert(message);
+                    
+                    // If service restart was attempted, show a countdown and reload
+                    if (data.restart_attempted) {
+                        let countdown = 10;
+                        const countdownInterval = setInterval(() => {
+                            button.text(`Reloading in ${countdown}s...`);
+                            countdown--;
+                            if (countdown < 0) {
+                                clearInterval(countdownInterval);
+                                window.location.reload();
+                            }
+                        }, 1000);
+                    } else {
+                        // Manual restart needed
+                        if (confirm('Update complete! The application needs to be restarted manually. Reload the page now?')) {
+                            window.location.reload();
+                        }
+                    }
+                } else {
+                    alert(`❌ Update failed: ${data.message}`);
+                }
+            },
+            error: function(jqXHR) {
+                const errorMessage = jqXHR.responseJSON ? jqXHR.responseJSON.message : "Update request failed";
+                alert(`❌ Update failed: ${errorMessage}`);
+            },
+            complete: function() {
+                if (!button.text().includes('Reloading')) {
+                    button.text(originalText).prop('disabled', false);
+                }
+            }
         });
     });
 

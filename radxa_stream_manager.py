@@ -507,6 +507,176 @@ def wifi_connect():
     result = connect_to_wifi(ssid, password)
     return jsonify(result)
 
+
+@app.route("/api/version", methods=["GET"])
+def get_version():
+    """Get current version information."""
+    try:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        
+        # Try to get git commit info
+        current_commit = None
+        commit_date = None
+        try:
+            current_commit = run_command("git rev-parse HEAD")
+            if current_commit:
+                current_commit = current_commit[:7]  # Short hash
+                commit_date = run_command("git log -1 --format=%cd --date=short")
+        except:
+            pass
+        
+        return jsonify({
+            "commit": current_commit or "Unknown",
+            "date": commit_date or "Unknown",
+            "repository": "https://github.com/SCSIExpress/RCSM"
+        })
+    except Exception as e:
+        return jsonify({
+            "commit": "Unknown",
+            "date": "Unknown", 
+            "error": str(e)
+        })
+
+
+@app.route("/api/update", methods=["POST"])
+def check_and_update():
+    """Check for updates from GitHub and update the application."""
+    try:
+        import tempfile
+        import shutil
+        import urllib.request
+        import zipfile
+        import time
+        
+        # GitHub repository information
+        repo_url = "https://github.com/SCSIExpress/RCSM"
+        api_url = "https://api.github.com/repos/SCSIExpress/RCSM/commits/main"
+        download_url = "https://github.com/SCSIExpress/RCSM/archive/refs/heads/main.zip"
+        
+        # Get current directory
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        
+        # Check if we're in a git repository to get current commit
+        current_commit = None
+        try:
+            current_commit = run_command("git rev-parse HEAD")
+            if current_commit:
+                current_commit = current_commit[:7]  # Short hash
+        except:
+            logging.info("Not in a git repository, proceeding with update")
+        
+        # Get latest commit from GitHub API
+        try:
+            with urllib.request.urlopen(api_url, timeout=10) as response:
+                import json
+                data = json.loads(response.read().decode())
+                latest_commit = data['sha'][:7]  # Short hash
+                commit_message = data['commit']['message']
+                commit_date = data['commit']['author']['date']
+        except Exception as e:
+            return jsonify({
+                "status": "error", 
+                "message": f"Failed to check for updates: {str(e)}"
+            }), 500
+        
+        # Compare commits if we have current commit info
+        if current_commit and current_commit == latest_commit:
+            return jsonify({
+                "status": "up_to_date",
+                "message": "Application is already up to date",
+                "current_commit": current_commit,
+                "latest_commit": latest_commit
+            })
+        
+        # Download and extract update
+        with tempfile.TemporaryDirectory() as temp_dir:
+            zip_path = os.path.join(temp_dir, "update.zip")
+            
+            # Download the latest version
+            logging.info(f"Downloading update from {download_url}")
+            with urllib.request.urlopen(download_url, timeout=30) as response:
+                with open(zip_path, 'wb') as f:
+                    shutil.copyfileobj(response, f)
+            
+            # Extract the zip file
+            extract_dir = os.path.join(temp_dir, "extracted")
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                zip_ref.extractall(extract_dir)
+            
+            # Find the extracted folder (should be RCSM-main)
+            extracted_folders = [d for d in os.listdir(extract_dir) if os.path.isdir(os.path.join(extract_dir, d))]
+            if not extracted_folders:
+                return jsonify({
+                    "status": "error",
+                    "message": "No folders found in downloaded archive"
+                }), 500
+            
+            source_dir = os.path.join(extract_dir, extracted_folders[0])
+            
+            # Backup current files
+            backup_dir = os.path.join(current_dir, f"backup_{int(time.time())}")
+            os.makedirs(backup_dir, exist_ok=True)
+            
+            # Files to update
+            files_to_update = [
+                "radxa_stream_manager.py",
+                "templates/index.html",
+                "setup.sh",
+                "README.md"
+            ]
+            
+            updated_files = []
+            for file_path in files_to_update:
+                source_file = os.path.join(source_dir, file_path)
+                dest_file = os.path.join(current_dir, file_path)
+                backup_file = os.path.join(backup_dir, file_path)
+                
+                if os.path.exists(source_file):
+                    # Create backup directory structure
+                    os.makedirs(os.path.dirname(backup_file), exist_ok=True)
+                    
+                    # Backup current file if it exists
+                    if os.path.exists(dest_file):
+                        shutil.copy2(dest_file, backup_file)
+                    
+                    # Copy new file
+                    os.makedirs(os.path.dirname(dest_file), exist_ok=True)
+                    shutil.copy2(source_file, dest_file)
+                    updated_files.append(file_path)
+                    logging.info(f"Updated file: {file_path}")
+        
+        # Restart the service if it's running as a systemd service
+        restart_attempted = False
+        try:
+            # Check if running as systemd service
+            service_status = run_command("systemctl is-active radxa-stream-manager")
+            if service_status and "active" in service_status:
+                logging.info("Restarting radxa-stream-manager service")
+                run_command("sudo systemctl restart radxa-stream-manager")
+                restart_attempted = True
+        except:
+            logging.info("Service restart not available or not running as service")
+        
+        return jsonify({
+            "status": "success",
+            "message": f"Successfully updated {len(updated_files)} files",
+            "updated_files": updated_files,
+            "backup_location": backup_dir,
+            "latest_commit": latest_commit,
+            "commit_message": commit_message,
+            "commit_date": commit_date,
+            "restart_attempted": restart_attempted,
+            "restart_note": "Please manually restart the application if not running as a service"
+        })
+        
+    except Exception as e:
+        logging.error(f"Update failed: {e}")
+        return jsonify({
+            "status": "error",
+            "message": f"Update failed: {str(e)}"
+        }), 500
+
+
 @app.route("/api/test", methods=["POST"])
 def run_tests():
     """Runs a series of system tests."""
