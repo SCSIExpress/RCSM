@@ -40,7 +40,7 @@ apt-get update
 apt-get install -y build-essential cmake git libdrm-dev \
     libx264-dev libx265-dev pkg-config \
     python3-pip python3-venv v4l-utils meson ninja-build \
-    libssl-dev net-tools wget curl
+    libssl-dev net-tools wget curl network-manager
 
 # --- 2. Setup Python Environment ---
 print_info "Setting up Python virtual environment..."
