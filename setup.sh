@@ -1,12 +1,18 @@
 #!/bin/bash
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# Setup Script for Radxa Zero 3E Streaming Manager
+# Setup Script for Radxa Camera Stream Manager (RCSM)
 #
 # This script installs all necessary dependencies, downloads MediaMTX,
-# compiles ffmpeg-rockchip, and sets up the systemd service.
+# compiles ffmpeg-rockchip, downloads application files from GitHub,
+# and sets up the systemd service.
 #
-# v5: Makes build process idempotent/resumable.
+# Usage:
+#   curl -fsSL https://raw.githubusercontent.com/SCSIExpress/RCSM/main/setup.sh | sudo bash
+#   or
+#   wget -qO- https://raw.githubusercontent.com/SCSIExpress/RCSM/main/setup.sh | sudo bash
+#
+# v6: Downloads application files from GitHub repository automatically.
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 set -e
@@ -30,11 +36,11 @@ print_success() {
 # --- 1. Install System Dependencies ---
 print_info "Updating package lists and installing dependencies..."
 apt-get update
-# Add meson and ninja-build for manual compilation
+# Add meson and ninja-build for manual compilation, wget for downloading files
 apt-get install -y build-essential cmake git libdrm-dev \
     libx264-dev libx265-dev pkg-config \
     python3-pip python3-venv v4l-utils meson ninja-build \
-    libssl-dev net-tools
+    libssl-dev net-tools wget curl
 
 # --- 2. Setup Python Environment ---
 print_info "Setting up Python virtual environment..."
@@ -142,12 +148,36 @@ else
 fi
 ldconfig
 
-# --- 6. Create Application Files ---
-print_info "Creating application files..."
-# The Python and HTML files should be placed in the same directory as this script.
-cp radxa_stream_manager.py $APP_DIR/
+# --- 6. Download and Install Application Files ---
+print_info "Downloading application files from GitHub..."
 mkdir -p $APP_DIR/templates
-cp templates/index.html $APP_DIR/templates/
+
+# GitHub repository base URL
+GITHUB_RAW_URL="https://raw.githubusercontent.com/SCSIExpress/RCSM/main"
+
+# Download main Python application
+print_info "Downloading radxa_stream_manager.py..."
+if wget -q -O $APP_DIR/radxa_stream_manager.py "$GITHUB_RAW_URL/radxa_stream_manager.py"; then
+    print_success "Downloaded radxa_stream_manager.py"
+else
+    echo -e "\e[31m[ERROR]\e[0m Failed to download radxa_stream_manager.py"
+    exit 1
+fi
+
+# Download HTML template
+print_info "Downloading index.html template..."
+if wget -q -O $APP_DIR/templates/index.html "$GITHUB_RAW_URL/templates/index.html"; then
+    print_success "Downloaded index.html template"
+else
+    echo -e "\e[31m[ERROR]\e[0m Failed to download index.html template"
+    exit 1
+fi
+
+# Make the Python script executable
+chmod +x $APP_DIR/radxa_stream_manager.py
+
+# Set proper ownership
+chown -R $APP_USER:$APP_USER $APP_DIR
 
 # --- 7. Set Device Permissions with udev ---
 print_info "Setting up udev rules for media devices..."
@@ -227,6 +257,20 @@ systemctl enable mediamtx radxa-stream-manager
 systemctl restart mediamtx
 systemctl restart radxa-stream-manager
 
-print_success "Setup complete!"
-echo "You can now access the web interface at http://<your-radxa-ip>:5000"
-echo "To connect to Tailscale, run: sudo tailscale up"
+print_success "RCSM Setup complete!"
+echo ""
+echo "🎉 Radxa Camera Stream Manager has been installed successfully!"
+echo ""
+echo "📱 Web Interface: http://$(hostname -I | awk '{print $1}'):5000"
+echo "📱 Or access via: http://localhost:5000"
+echo ""
+echo "🔧 Service Status:"
+echo "   - MediaMTX: $(systemctl is-active mediamtx)"
+echo "   - RCSM App: $(systemctl is-active radxa-stream-manager)"
+echo ""
+echo "📋 Useful Commands:"
+echo "   - Check logs: sudo journalctl -u radxa-stream-manager -f"
+echo "   - Restart app: sudo systemctl restart radxa-stream-manager"
+echo "   - Connect Tailscale: sudo tailscale up"
+echo ""
+echo "📖 Documentation: https://github.com/SCSIExpress/RCSM"

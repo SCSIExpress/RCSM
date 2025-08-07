@@ -18,23 +18,34 @@ This guide provides detailed installation instructions for RCSM on various Radxa
 
 ## Quick Installation
 
-### Method 1: Automated Setup (Recommended)
+### Method 1: One-Command Install (Recommended)
 
-1. **Clone the repository:**
+Install RCSM with a single command that downloads everything automatically:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/SCSIExpress/RCSM/main/setup.sh | sudo bash
+```
+
+Or using wget:
+```bash
+wget -qO- https://raw.githubusercontent.com/SCSIExpress/RCSM/main/setup.sh | sudo bash
+```
+
+That's it! The script will:
+- Install all dependencies
+- Download the latest application files from GitHub
+- Set up services automatically
+- Start the web interface
+
+### Method 2: Manual Repository Clone
+
+If you prefer to clone the repository first:
+
 ```bash
 git clone https://github.com/SCSIExpress/RCSM.git
 cd RCSM
-```
-
-2. **Run the setup script:**
-```bash
 chmod +x setup.sh
-./setup.sh
-```
-
-3. **Start the application:**
-```bash
-python3 radxa_stream_manager.py
+sudo ./setup.sh
 ```
 
 ### Method 2: Manual Installation

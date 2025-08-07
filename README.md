@@ -20,27 +20,23 @@ A web-based interface for managing camera streams on Radxa single-board computer
 
 ### Installation
 
-1. Clone the repository:
+**One-Command Install:**
 ```bash
-git clone https://github.com/SCSIExpress/RCSM.git
-cd RCSM
+curl -fsSL https://raw.githubusercontent.com/SCSIExpress/RCSM/main/setup.sh | sudo bash
 ```
 
-2. Run the setup script:
-```bash
-chmod +x setup.sh
-./setup.sh
-```
+That's it! The installer will:
+- Download all required files from GitHub
+- Install dependencies automatically  
+- Set up and start the services
+- Configure everything for you
 
-3. Start the application:
-```bash
-python3 radxa_stream_manager.py
-```
-
-4. Open your browser and navigate to:
+**Access the web interface:**
 ```
 http://your-radxa-ip:5000
 ```
+
+The setup script handles everything automatically - no need to clone the repository or manually start services.
 
 ## Usage
 
