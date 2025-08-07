@@ -726,8 +726,13 @@ $(document).ready(function() {
             if (config.stream_name) $('#stream-name').val(config.stream_name);
             if (config.auto_start !== undefined) $('#auto-start').prop('checked', config.auto_start);
             
-            updatePlaybackUrl();conds for video devices to load
-            }
+            updatePlaybackUrl();
+            
+            // Wait a few seconds for video devices to load
+            setTimeout(function() {
+                if (config.device) $('#video-device').val(config.device);
+            }, 2000);
+        }
         }
     }
 
