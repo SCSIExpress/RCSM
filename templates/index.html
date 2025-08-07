@@ -1,0 +1,1025 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Radxa Zero 3E Stream Manager</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <style>
+        body {
+            background-color: #1a202c;
+            color: #e2e8f0;
+        }
+        .card {
+            background-color: #2d3748;
+            border-radius: 0.5rem;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+        .btn {
+            padding: 0.5rem 1rem;
+            border-radius: 0.25rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        .btn-green {
+            background-color: #38a169;
+            color: white;
+        }
+        .btn-green:hover {
+            background-color: #2f855a;
+        }
+        .btn-red {
+            background-color: #e53e3e;
+            color: white;
+        }
+        .btn-red:hover {
+            background-color: #c53030;
+        }
+        .btn-blue {
+            background-color: #4299e1;
+            color: white;
+        }
+        .btn-blue:hover {
+            background-color: #3182ce;
+        }
+        .input-field {
+            background-color: #4a5568;
+            border: 1px solid #718096;
+            color: #e2e8f0;
+        }
+        .log-viewer {
+            background-color: #1a202c;
+            color: #a0aec0;
+            font-family: monospace;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            height: 200px;
+            overflow-y: scroll;
+            border-radius: 0.25rem;
+            padding: 0.5rem;
+        }
+        #stream-preview {
+            background-color: #000;
+            border: 2px solid #4a5568;
+        }
+        input[type="checkbox"] {
+            background-color: #4a5568;
+            border: 1px solid #718096;
+        }
+        input[type="range"] {
+            background-color: #4a5568;
+            height: 6px;
+            border-radius: 3px;
+            outline: none;
+        }
+        input[type="range"]::-webkit-slider-thumb {
+            appearance: none;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: #4299e1;
+            cursor: pointer;
+        }
+        input[type="range"]::-moz-range-thumb {
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: #4299e1;
+            cursor: pointer;
+            border: none;
+        }
+        .status-dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 5px;
+        }
+        .status-green {
+            background-color: #38a169;
+        }
+        .status-red {
+            background-color: #e53e3e;
+        }
+        .status-yellow {
+            background-color: #d69e2e;
+        }
+        .wifi-network {
+            padding: 8px;
+            border: 1px solid #4a5568;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        .wifi-network:hover {
+            background-color: #4a5568;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container mx-auto p-4">
+    <h1 class="text-3xl font-bold mb-4">Radxa Zero 3E Stream Manager</h1>
+
+    <!-- Status Bar -->
+    <div class="card grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4 text-center">
+        <div>
+            <h2 class="font-bold">MediaMTX</h2>
+            <p id="mediamtx-status"><span class="status-dot status-red"></span>Stopped</p>
+        </div>
+        <div>
+            <h2 class="font-bold">FFmpeg Stream</h2>
+            <p id="ffmpeg-status"><span class="status-dot status-red"></span>Stopped</p>
+        </div>
+        <div>
+            <h2 class="font-bold">WiFi</h2>
+            <p id="wifi-status"><span class="status-dot status-red"></span>Disconnected</p>
+        </div>
+        <div>
+            <h2 class="font-bold">Tailscale</h2>
+            <p id="tailscale-status"><span class="status-dot status-red"></span>Disconnected</p>
+        </div>
+        <div>
+            <h2 class="font-bold">Bitrate</h2>
+            <p id="stream-bitrate">N/A</p>
+        </div>
+        <div>
+            <h2 class="font-bold">Speed</h2>
+            <p id="stream-speed">N/A</p>
+        </div>
+        <div>
+            <h2 class="font-bold">CPU Temp</h2>
+            <p id="cpu-temp">N/A</p>
+        </div>
+        <div>
+            <h2 class="font-bold">CPU / Mem</h2>
+            <p><span id="cpu-usage">N/A</span> / <span id="mem-usage">N/A</span></p>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <!-- Stream Control -->
+        <div class="card">
+            <h2 class="text-xl font-bold mb-4">Stream Control</h2>
+            <div class="space-y-4">
+                <div>
+                    <label for="video-device" class="block mb-2">Video Input</label>
+                    <div class="flex space-x-2">
+                        <select id="video-device" class="flex-1 p-2 rounded input-field"></select>
+                        <button id="check-capabilities" class="btn btn-blue">Check Caps</button>
+                    </div>
+                </div>
+                <div>
+                    <label for="resolution" class="block mb-2">Resolution</label>
+                    <select id="resolution" class="w-full p-2 rounded input-field">
+                        <option>1920x1080</option>
+                        <option selected>1280x720</option>
+                        <option>640x480</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="framerate" class="block mb-2">Framerate</label>
+                    <select id="framerate" class="w-full p-2 rounded input-field">
+                        <option>30</option>
+                        <option selected>25</option>
+                        <option>15</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="bitrate" class="block mb-2">Bitrate (kbps)</label>
+                    <select id="bitrate" class="w-full p-2 rounded input-field">
+                        <option>8000</option>
+                        <option>6000</option>
+                        <option>4000</option>
+                        <option selected>2000</option>
+                        <option>1500</option>
+                        <option>1000</option>
+                        <option>800</option>
+                        <option>500</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="encoder" class="block mb-2">Encoder</label>
+                    <select id="encoder" class="w-full p-2 rounded input-field">
+                        <optgroup label="Hardware (Rockchip)">
+                            <option selected>h264_rkmpp</option>
+                            <option>hevc_rkmpp</option>
+                            <option>mjpeg_rkmpp</option>
+                        </optgroup>
+                        <optgroup label="Software (Troubleshooting)">
+                            <option>libx264</option>
+                            <option>libx265</option>
+                            <option>mjpeg</option>
+                        </optgroup>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <!-- Service Control -->
+        <div class="card">
+            <h2 class="text-xl font-bold mb-4">SRT Configuration</h2>
+            <div class="space-y-4">
+                <div>
+                    <label for="srt-port" class="block mb-2">SRT Port</label>
+                    <input type="number" id="srt-port" value="8888" class="w-full p-2 rounded input-field">
+                </div>
+                <div>
+                    <label for="stream-name" class="block mb-2">Stream Name</label>
+                    <input type="text" id="stream-name" value="live" class="w-full p-2 rounded input-field">
+                </div>
+            </div>
+
+            <div class="mt-6">
+                <h2 class="text-xl font-bold mb-2">Configuration</h2>
+                <div class="flex space-x-2 mb-4">
+                    <button id="save-config" class="btn btn-blue flex-1">Save Config</button>
+                    <button id="load-config" class="btn btn-blue flex-1">Load Config</button>
+                </div>
+                <div class="mb-4">
+                    <label class="flex items-center">
+                        <input type="checkbox" id="auto-start" class="mr-2">
+                        <span>Auto-start with last configuration on service load</span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="mt-6">
+                <h2 class="text-xl font-bold mb-2">Actions</h2>
+                <div class="flex space-x-4">
+                    <button id="start-stream" class="btn btn-green flex-1">Start Stream</button>
+                    <button id="stop-stream" class="btn btn-red flex-1">Stop Stream</button>
+                </div>
+            </div>
+
+             <div class="mt-6">
+                <h3 class="font-bold">Playback URLs:</h3>
+                <p><strong>SRT:</strong> <span id="stream-url" class="text-sm text-gray-400 break-all">N/A</span></p>
+                <p><strong>HLS:</strong> <span id="hls-url" class="text-sm text-gray-400 break-all">N/A</span></p>
+            </div>
+        </div>
+
+        <!-- Camera Controls -->
+        <div class="card">
+            <h2 class="text-xl font-bold mb-4">Camera Controls</h2>
+            <div class="space-y-4">
+                <div>
+                    <div class="flex items-center justify-between mb-2">
+                        <label for="exposure-slider" class="block">Exposure</label>
+                        <label class="flex items-center">
+                            <input type="checkbox" id="exposure-auto" class="mr-2">
+                            <span class="text-sm">Auto</span>
+                        </label>
+                    </div>
+                    <input type="range" id="exposure-slider" class="w-full" min="1" max="5000" value="156" disabled>
+                    <div class="text-sm text-gray-400 mt-1">Value: <span id="exposure-value">156</span></div>
+                </div>
+                
+                <div>
+                    <div class="flex items-center justify-between mb-2">
+                        <label for="brightness-slider" class="block">Brightness</label>
+                    </div>
+                    <input type="range" id="brightness-slider" class="w-full" min="0" max="255" value="128">
+                    <div class="text-sm text-gray-400 mt-1">Value: <span id="brightness-value">128</span></div>
+                </div>
+                
+                <div>
+                    <div class="flex items-center justify-between mb-2">
+                        <label for="contrast-slider" class="block">Contrast</label>
+                    </div>
+                    <input type="range" id="contrast-slider" class="w-full" min="0" max="255" value="128">
+                    <div class="text-sm text-gray-400 mt-1">Value: <span id="contrast-value">128</span></div>
+                </div>
+                
+                <div>
+                    <div class="flex items-center justify-between mb-2">
+                        <label for="saturation-slider" class="block">Saturation</label>
+                    </div>
+                    <input type="range" id="saturation-slider" class="w-full" min="0" max="255" value="128">
+                    <div class="text-sm text-gray-400 mt-1">Value: <span id="saturation-value">128</span></div>
+                </div>
+                
+                <div>
+                    <div class="flex items-center justify-between mb-2">
+                        <label for="white-balance-slider" class="block">White Balance</label>
+                        <label class="flex items-center">
+                            <input type="checkbox" id="white-balance-auto" class="mr-2" checked>
+                            <span class="text-sm">Auto</span>
+                        </label>
+                    </div>
+                    <input type="range" id="white-balance-slider" class="w-full" min="2800" max="6500" value="4600" disabled>
+                    <div class="text-sm text-gray-400 mt-1">Value: <span id="white-balance-value">4600</span>K</div>
+                </div>
+                
+                <div class="flex space-x-2">
+                    <button id="load-camera-controls" class="btn btn-blue flex-1">Load Controls</button>
+                    <button id="reset-camera-controls" class="btn btn-blue flex-1">Reset to Defaults</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Network Management -->
+    <div class="card">
+        <h2 class="text-xl font-bold mb-4">Network Management</h2>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <!-- WiFi Management -->
+            <div>
+                <h3 class="font-bold mb-2">WiFi Networks</h3>
+                <div class="flex space-x-2 mb-4">
+                    <button id="scan-wifi" class="btn btn-blue flex-1">Scan Networks</button>
+                    <button id="refresh-wifi-status" class="btn btn-blue flex-1">Refresh Status</button>
+                </div>
+                <div id="wifi-networks" class="space-y-2 max-h-48 overflow-y-auto">
+                    <p class="text-gray-400">Click "Scan Networks" to find available WiFi</p>
+                </div>
+                <div id="wifi-connect-form" class="hidden mt-4 p-4 bg-gray-700 rounded">
+                    <h4 class="font-bold mb-2">Connect to Network</h4>
+                    <p class="text-sm mb-2">Network: <span id="connect-ssid"></span></p>
+                    <input type="password" id="wifi-password" placeholder="Password (leave empty for open networks)" class="w-full p-2 rounded input-field mb-2">
+                    <div class="flex space-x-2">
+                        <button id="wifi-connect-btn" class="btn btn-green flex-1">Connect</button>
+                        <button id="wifi-cancel-btn" class="btn btn-red flex-1">Cancel</button>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Tailscale Management -->
+            <div>
+                <h3 class="font-bold mb-2">Tailscale VPN</h3>
+                <div class="space-y-2">
+                    <div class="flex justify-between">
+                        <span>Status:</span>
+                        <span id="tailscale-detailed-status" class="text-gray-400">Unknown</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span>Tailscale IP:</span>
+                        <span id="tailscale-ip" class="text-gray-400">N/A</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span>Hostname:</span>
+                        <span id="tailscale-hostname" class="text-gray-400">N/A</span>
+                    </div>
+                </div>
+                <div class="mt-4">
+                    <p class="text-sm text-gray-400 mb-2">To connect Tailscale, run in terminal:</p>
+                    <code class="bg-gray-800 p-2 rounded block text-sm">sudo tailscale up</code>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 gap-6">
+        <!-- Stream Preview -->
+        <div class="card">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-xl font-bold">Stream Preview</h2>
+                <div class="space-x-2">
+                    <button id="check-hls" class="btn btn-blue">Check HLS</button>
+                    <button id="toggle-preview" class="btn btn-blue">Enable Preview</button>
+                </div>
+            </div>
+            <div id="preview-container" class="hidden">
+                <video id="stream-preview" class="w-full max-w-2xl mx-auto rounded" controls muted>
+                    <p class="text-center text-gray-400">Your browser doesn't support video playback.</p>
+                </video>
+                <p class="text-sm text-gray-400 mt-2 text-center">Preview uses HLS - there may be a 5-10 second delay</p>
+            </div>
+            <div id="preview-disabled" class="text-center text-gray-400 py-8">
+                <p>Preview disabled to save resources</p>
+                <p class="text-sm">Click "Enable Preview" to view the stream</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Diagnostics Card -->
+    <div class="card">
+        <h2 class="text-xl font-bold mb-4">System Diagnostics</h2>
+        <div class="flex space-x-4 mb-4">
+            <button id="run-system-test" class="btn btn-blue">Run System Test</button>
+            <button id="refresh-log" class="btn btn-blue">Refresh App Log</button>
+            <button id="refresh-mediamtx-log" class="btn btn-blue">MediaMTX Logs</button>
+        </div>
+        
+        <h3 class="font-bold mb-2">Test Results:</h3>
+        <ul id="test-results" class="mb-4">
+            <li class="text-gray-400">Click "Run System Test" to check components.</li>
+        </ul>
+
+        <h3 class="font-bold mb-2">Application Log:</h3>
+        <pre id="log-viewer" class="log-viewer"></pre>
+    </div>
+
+</div>
+
+<script>
+$(document).ready(function() {
+    // --- Initial Load ---
+    updateStatus();
+    loadVideoDevices();
+    updatePlaybackUrl();
+    refreshLog();
+    loadConfiguration();
+
+    // --- Periodic Updates ---
+    setInterval(updateStatus, 2000); 
+    setInterval(updateStreamStats, 2000);
+
+    // --- Functions ---
+    function getVideoErrorMessage(errorCode) {
+        switch(errorCode) {
+            case 1: return 'MEDIA_ERR_ABORTED - The video playback was aborted';
+            case 2: return 'MEDIA_ERR_NETWORK - A network error occurred';
+            case 3: return 'MEDIA_ERR_DECODE - The video is corrupted or not supported';
+            case 4: return 'MEDIA_ERR_SRC_NOT_SUPPORTED - The video format is not supported';
+            default: return 'Unknown error';
+        }
+    }
+
+    function updateStatus() {
+        $.get("/api/status", function(data) {
+            // MediaMTX Status
+            if (data.mediamtx_status === "Running") {
+                $('#mediamtx-status').html('<span class="status-dot status-green"></span>Running');
+            } else {
+                $('#mediamtx-status').html('<span class="status-dot status-red"></span>Stopped');
+            }
+            // FFmpeg Status
+            if (data.ffmpeg_status === "Running") {
+                $('#ffmpeg-status').html('<span class="status-dot status-green"></span>Running');
+            } else {
+                $('#ffmpeg-status').html('<span class="status-dot status-red"></span>Stopped');
+            }
+            // System Info
+            $('#cpu-temp').text(data.temperature);
+            $('#cpu-usage').text(data.cpu_usage);
+            $('#mem-usage').text(data.memory_usage);
+        });
+        
+        // Update WiFi status
+        $.get("/api/wifi/status", function(data) {
+            if (data.connected) {
+                $('#wifi-status').html('<span class="status-dot status-green"></span>Connected');
+            } else {
+                $('#wifi-status').html('<span class="status-dot status-red"></span>Disconnected');
+            }
+        });
+        
+        // Update Tailscale status
+        $.get("/api/tailscale/status", function(data) {
+            if (data.connected) {
+                $('#tailscale-status').html('<span class="status-dot status-green"></span>Connected');
+                $('#tailscale-detailed-status').text('Connected');
+                $('#tailscale-ip').text(data.ip || 'N/A');
+                $('#tailscale-hostname').text(data.hostname || 'N/A');
+            } else {
+                $('#tailscale-status').html('<span class="status-dot status-red"></span>Disconnected');
+                $('#tailscale-detailed-status').text('Disconnected');
+                $('#tailscale-ip').text('N/A');
+                $('#tailscale-hostname').text('N/A');
+            }
+        });
+    }
+
+    function updateStreamStats() {
+        if ($('#ffmpeg-status').text().includes('Running')) {
+            $.get("/api/stream/stats", function(data) {
+                $('#stream-bitrate').text(data.bitrate || '...');
+                $('#stream-speed').text(data.speed || '...');
+            });
+        } else {
+            $('#stream-bitrate').text('N/A');
+            $('#stream-speed').text('N/A');
+        }
+    }
+
+    function loadVideoDevices() {
+        $.get("/api/video/devices", function(data) {
+            const select = $('#video-device');
+            select.empty();
+            if (data && data.length > 0) {
+                data.forEach(function(device) {
+                    select.append(`<option value="${device.path}">${device.name}</option>`);
+                });
+            } else {
+                select.append('<option value="">No video devices found</option>');
+            }
+        });
+    }
+
+    function updatePlaybackUrl() {
+        const ip = window.location.hostname || 'localhost';
+        const port = $('#srt-port').val();
+        const name = $('#stream-name').val();
+        if (port && name) {
+            const srtUrl = `srt://${ip}:${port}?streamid=read:${name}`;
+            const hlsUrl = `http://${ip}:8080/${name}/index.m3u8`;
+            $('#stream-url').text(srtUrl);
+            $('#hls-url').text(hlsUrl);
+        } else {
+            $('#stream-url').text('N/A');
+            $('#hls-url').text('N/A');
+        }
+    }
+
+    function refreshLog() {
+        $.get("/api/logs", function(data) {
+            const logViewer = $('#log-viewer');
+            logViewer.text(data.log || "Log is empty.");
+            // Scroll to the bottom
+            logViewer.scrollTop(logViewer[0].scrollHeight);
+        });
+    }
+
+    // --- Event Handlers ---
+    $('#srt-port, #stream-name').on('input', updatePlaybackUrl);
+
+    $('#start-stream').click(function() {
+        const streamData = {
+            device: $('#video-device').val(),
+            resolution: $('#resolution').val(),
+            framerate: $('#framerate').val(),
+            bitrate: $('#bitrate').val(),
+            encoder: $('#encoder').val(),
+            srt_port: $('#srt-port').val(),
+            stream_name: $('#stream-name').val()
+        };
+
+        if (!streamData.device) {
+            alert("No video device selected. Please connect a camera.");
+            return;
+        }
+
+        $(this).text("Starting...").prop('disabled', true);
+
+        $.ajax({
+            url: "/api/stream/start",
+            type: "POST",
+            contentType: "application/json",
+            data: JSON.stringify(streamData),
+            success: function() {
+                setTimeout(updateStatus, 1000);
+                setTimeout(refreshLog, 1500);
+            },
+            error: function(jqXHR) {
+                const errorMessage = jqXHR.responseJSON ? jqXHR.responseJSON.message : "An unknown error occurred.";
+                alert("Failed to start stream:\n" + errorMessage);
+                setTimeout(refreshLog, 500);
+            },
+            complete: function() {
+                $('#start-stream').text("Start Stream").prop('disabled', false);
+            }
+        });
+    });
+
+    $('#stop-stream').click(function() {
+        $(this).text("Stopping...").prop('disabled', true);
+        $.post("/api/stream/stop", function() {
+            setTimeout(updateStatus, 1000);
+            setTimeout(refreshLog, 1500);
+        }).always(function() {
+            $('#stop-stream').text("Stop Stream").prop('disabled', false);
+        });
+    });
+
+    $('#run-system-test').click(function() {
+        const resultsList = $('#test-results');
+        resultsList.html('<li>Running tests...</li>');
+        $.post("/api/test", function(data) {
+            resultsList.empty();
+            if (data && data.length > 0) {
+                data.forEach(function(result) {
+                    const statusClass = result.status === 'pass' ? 'text-green-400' : 'text-red-400';
+                    const icon = result.status === 'pass' ? '✓' : '✗';
+                    resultsList.append(
+                        `<li class="${statusClass}">${icon} <strong>${result.name}:</strong> ${result.message}</li>`
+                    );
+                });
+            } else {
+                resultsList.html('<li>No test results returned.</li>');
+            }
+            refreshLog();
+        });
+    });
+
+    $('#refresh-log').click(refreshLog);
+    
+    $('#refresh-mediamtx-log').click(function() {
+        $.get("/api/mediamtx/logs", function(data) {
+            const logViewer = $('#log-viewer');
+            logViewer.text(data.log || "MediaMTX log is empty.");
+            // Scroll to the bottom
+            logViewer.scrollTop(logViewer[0].scrollHeight);
+        });
+    });
+
+    // Stream preview toggle
+    let previewEnabled = false;
+    $('#toggle-preview').click(function() {
+        const video = $('#stream-preview')[0];
+        const container = $('#preview-container');
+        const disabled = $('#preview-disabled');
+        const button = $(this);
+
+        if (!previewEnabled) {
+            // Enable preview
+            const ip = window.location.hostname || 'localhost';
+            const name = $('#stream-name').val() || 'live';
+            const hlsUrl = `http://${ip}:8080/${name}/index.m3u8`;
+            
+            video.src = hlsUrl;
+            container.removeClass('hidden');
+            disabled.addClass('hidden');
+            button.text('Disable Preview').removeClass('btn-blue').addClass('btn-red');
+            previewEnabled = true;
+            
+            // Add error handling for video
+            video.onerror = function(e) {
+                console.error('Video error:', e);
+                const errorMsg = video.error ? `Error code: ${video.error.code} - ${getVideoErrorMessage(video.error.code)}` : 'Unknown video error';
+                container.prepend(`<div class="text-red-400 text-sm mb-2">Video error: ${errorMsg}</div>`);
+            };
+            
+            video.onloadstart = function() {
+                console.log('Video loading started');
+            };
+            
+            video.oncanplay = function() {
+                console.log('Video can start playing');
+            };
+            
+            // Check if HLS stream is available before trying to load
+            const streamName = $('#stream-name').val() || 'live';
+            $.get(`/api/stream/hls/${streamName}`, function(data) {
+                if (data.available) {
+                    console.log('HLS stream is available:', data.url);
+                    // Try to load and play
+                    video.load();
+                    setTimeout(() => {
+                        video.play().catch(e => {
+                            console.log('Autoplay prevented or stream not available:', e);
+                            container.prepend('<div class="text-yellow-400 text-sm mb-2">Click play button to start preview (autoplay blocked)</div>');
+                        });
+                    }, 1000);
+                } else {
+                    console.error('HLS stream not available:', data.error);
+                    container.prepend(`<div class="text-red-400 text-sm mb-2">HLS stream not available: ${data.error}</div>`);
+                }
+            }).fail(function() {
+                console.error('Failed to check HLS stream availability');
+                container.prepend('<div class="text-red-400 text-sm mb-2">Failed to check stream availability</div>');
+            });
+        } else {
+            // Disable preview
+            video.pause();
+            video.src = '';
+            container.addClass('hidden');
+            disabled.removeClass('hidden');
+            button.text('Enable Preview').removeClass('btn-red').addClass('btn-blue');
+            previewEnabled = false;
+        }
+    });
+
+    // Auto-update preview URL when stream settings change
+    $('#stream-name').on('input', function() {
+        if (previewEnabled) {
+            const ip = window.location.hostname || 'localhost';
+            const name = $(this).val() || 'live';
+            const hlsUrl = `http://${ip}:8080/${name}/index.m3u8`;
+            const video = $('#stream-preview')[0];
+            video.src = hlsUrl;
+            video.load();
+        }
+    });
+
+    // Configuration Management
+    function saveConfiguration() {
+        const config = {
+            device: $('#video-device').val(),
+            resolution: $('#resolution').val(),
+            framerate: $('#framerate').val(),
+            bitrate: $('#bitrate').val(),
+            encoder: $('#encoder').val(),
+            srt_port: $('#srt-port').val(),
+            stream_name: $('#stream-name').val(),
+            auto_start: $('#auto-start').is(':checked')
+        };
+        localStorage.setItem('streamConfig', JSON.stringify(config));
+        alert('Configuration saved!');
+    }
+
+    function loadConfiguration() {
+        const savedConfig = localStorage.getItem('streamConfig');
+        if (savedConfig) {
+            const config = JSON.parse(savedConfig);
+            
+            // Load values into form fields
+            if (config.device) $('#video-device').val(config.device);
+            if (config.resolution) $('#resolution').val(config.resolution);
+            if (config.framerate) $('#framerate').val(config.framerate);
+            if (config.bitrate) $('#bitrate').val(config.bitrate);
+            if (config.encoder) $('#encoder').val(config.encoder);
+            if (config.srt_port) $('#srt-port').val(config.srt_port);
+            if (config.stream_name) $('#stream-name').val(config.stream_name);
+            if (config.auto_start !== undefined) $('#auto-start').prop('checked', config.auto_start);
+            
+            updatePlaybackUrl();conds for video devices to load
+            }
+        }
+    }
+
+    // Configuration event handlers
+    $('#save-config').click(saveConfiguration);
+    
+    $('#load-config').click(function() {
+        loadConfiguration();
+        alert('Configuration loaded!');
+    });
+
+    // Check device capabilities
+    $('#check-capabilities').click(function() {
+        const device = $('#video-device').val();
+        if (!device) {
+            alert('Please select a video device first');
+            return;
+        }
+        
+        $(this).text('Checking...').prop('disabled', true);
+        
+        // Remove /dev/ prefix for API call
+        const devicePath = device.replace('/dev/', '');
+        
+        $.get(`/api/video/capabilities/${devicePath}`, function(data) {
+            // Show capabilities in a popup or log viewer
+            const logViewer = $('#log-viewer');
+            logViewer.text(`Device Capabilities for ${data.device}:\n\n${data.capabilities}`);
+            logViewer.scrollTop(0);
+            
+            // Scroll to diagnostics section
+            $('html, body').animate({
+                scrollTop: $('#log-viewer').offset().top - 100
+            }, 500);
+        }).fail(function() {
+            alert('Failed to get device capabilities');
+        }).always(function() {
+            $('#check-capabilities').text('Check Caps').prop('disabled', false);
+        });
+    });
+
+    // Camera Controls
+    function updateSliderValue(sliderId, valueId, suffix = '') {
+        const slider = $(`#${sliderId}`);
+        const valueSpan = $(`#${valueId}`);
+        slider.on('input', function() {
+            valueSpan.text($(this).val() + suffix);
+        });
+    }
+
+    // Initialize slider value displays
+    updateSliderValue('exposure-slider', 'exposure-value');
+    updateSliderValue('brightness-slider', 'brightness-value');
+    updateSliderValue('contrast-slider', 'contrast-value');
+    updateSliderValue('saturation-slider', 'saturation-value');
+    updateSliderValue('white-balance-slider', 'white-balance-value', 'K');
+
+    // Auto exposure toggle
+    $('#exposure-auto').change(function() {
+        const isAuto = $(this).is(':checked');
+        $('#exposure-slider').prop('disabled', isAuto);
+        
+        const device = $('#video-device').val();
+        if (device) {
+            setCameraControl(device, 'exposure_auto', isAuto ? 3 : 1);
+        }
+    });
+
+    // Auto white balance toggle
+    $('#white-balance-auto').change(function() {
+        const isAuto = $(this).is(':checked');
+        $('#white-balance-slider').prop('disabled', isAuto);
+        
+        const device = $('#video-device').val();
+        if (device) {
+            setCameraControl(device, 'white_balance_temperature_auto', isAuto ? 1 : 0);
+        }
+    });
+
+    // Camera control sliders
+    $('#exposure-slider').on('change', function() {
+        const device = $('#video-device').val();
+        if (device && !$('#exposure-auto').is(':checked')) {
+            setCameraControl(device, 'exposure_absolute', $(this).val());
+        }
+    });
+
+    $('#brightness-slider').on('change', function() {
+        const device = $('#video-device').val();
+        if (device) {
+            setCameraControl(device, 'brightness', $(this).val());
+        }
+    });
+
+    $('#contrast-slider').on('change', function() {
+        const device = $('#video-device').val();
+        if (device) {
+            setCameraControl(device, 'contrast', $(this).val());
+        }
+    });
+
+    $('#saturation-slider').on('change', function() {
+        const device = $('#video-device').val();
+        if (device) {
+            setCameraControl(device, 'saturation', $(this).val());
+        }
+    });
+
+    $('#white-balance-slider').on('change', function() {
+        const device = $('#video-device').val();
+        if (device && !$('#white-balance-auto').is(':checked')) {
+            setCameraControl(device, 'white_balance_temperature', $(this).val());
+        }
+    });
+
+    function setCameraControl(device, control, value) {
+        const devicePath = device.replace('/dev/', '');
+        $.ajax({
+            url: `/api/video/control/${devicePath}`,
+            type: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({control: control, value: value}),
+            success: function(data) {
+                console.log(`Set ${control}=${value}:`, data.message);
+            },
+            error: function(xhr) {
+                console.error(`Failed to set ${control}=${value}:`, xhr.responseJSON?.message);
+            }
+        });
+    }
+
+    $('#load-camera-controls').click(function() {
+        const device = $('#video-device').val();
+        if (!device) {
+            alert('Please select a video device first');
+            return;
+        }
+        
+        const devicePath = device.replace('/dev/', '');
+        $.get(`/api/video/controls/${devicePath}`, function(data) {
+            const logViewer = $('#log-viewer');
+            logViewer.text(`Camera Controls for ${data.device}:\n\n${data.controls}`);
+            logViewer.scrollTop(0);
+            
+            $('html, body').animate({
+                scrollTop: $('#log-viewer').offset().top - 100
+            }, 500);
+        });
+    });
+
+    $('#reset-camera-controls').click(function() {
+        const device = $('#video-device').val();
+        if (!device) {
+            alert('Please select a video device first');
+            return;
+        }
+        
+        // Reset to default values
+        setCameraControl(device, 'brightness', 128);
+        setCameraControl(device, 'contrast', 128);
+        setCameraControl(device, 'saturation', 128);
+        setCameraControl(device, 'exposure_auto', 3);
+        setCameraControl(device, 'white_balance_temperature_auto', 1);
+        
+        // Update UI
+        $('#brightness-slider').val(128);
+        $('#brightness-value').text('128');
+        $('#contrast-slider').val(128);
+        $('#contrast-value').text('128');
+        $('#saturation-slider').val(128);
+        $('#saturation-value').text('128');
+        $('#exposure-auto').prop('checked', true);
+        $('#white-balance-auto').prop('checked', true);
+        $('#exposure-slider').prop('disabled', true);
+        $('#white-balance-slider').prop('disabled', true);
+        
+        alert('Camera controls reset to defaults');
+    });
+
+    // WiFi Management
+    $('#scan-wifi').click(function() {
+        const button = $(this);
+        button.text('Scanning...').prop('disabled', true);
+        
+        $.get('/api/wifi/scan', function(data) {
+            const container = $('#wifi-networks');
+            container.empty();
+            
+            if (data.networks && data.networks.length > 0) {
+                data.networks.forEach(function(network) {
+                    const signalBars = Math.ceil(parseInt(network.signal) / 25);
+                    const signalIcon = '📶'.repeat(Math.max(1, Math.min(4, signalBars)));
+                    const securityIcon = network.security === 'Open' ? '🔓' : '🔒';
+                    
+                    const networkDiv = $(`
+                        <div class="wifi-network" data-ssid="${network.ssid}" data-security="${network.security}">
+                            <div class="flex justify-between items-center">
+                                <span class="font-medium">${network.ssid}</span>
+                                <span class="text-sm text-gray-400">${signalIcon} ${securityIcon}</span>
+                            </div>
+                            <div class="text-xs text-gray-500">Signal: ${network.signal}% | ${network.security}</div>
+                        </div>
+                    `);
+                    
+                    networkDiv.click(function() {
+                        const ssid = $(this).data('ssid');
+                        const security = $(this).data('security');
+                        showWifiConnectForm(ssid, security);
+                    });
+                    
+                    container.append(networkDiv);
+                });
+            } else {
+                container.html('<p class="text-gray-400">No networks found</p>');
+            }
+        }).fail(function() {
+            $('#wifi-networks').html('<p class="text-red-400">Failed to scan networks</p>');
+        }).always(function() {
+            button.text('Scan Networks').prop('disabled', false);
+        });
+    });
+
+    function showWifiConnectForm(ssid, security) {
+        $('#connect-ssid').text(ssid);
+        $('#wifi-password').val('');
+        
+        if (security === 'Open') {
+            $('#wifi-password').hide();
+        } else {
+            $('#wifi-password').show();
+        }
+        
+        $('#wifi-connect-form').removeClass('hidden');
+    }
+
+    $('#wifi-connect-btn').click(function() {
+        const ssid = $('#connect-ssid').text();
+        const password = $('#wifi-password').val();
+        const button = $(this);
+        
+        button.text('Connecting...').prop('disabled', true);
+        
+        $.ajax({
+            url: '/api/wifi/connect',
+            type: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({ssid: ssid, password: password}),
+            success: function(data) {
+                if (data.success) {
+                    alert(`Successfully connected to ${ssid}`);
+                    $('#wifi-connect-form').addClass('hidden');
+                    updateStatus();
+                } else {
+                    alert(`Failed to connect: ${data.message}`);
+                }
+            },
+            error: function() {
+                alert('Connection request failed');
+            },
+            complete: function() {
+                button.text('Connect').prop('disabled', false);
+            }
+        });
+    });
+
+    $('#wifi-cancel-btn').click(function() {
+        $('#wifi-connect-form').addClass('hidden');
+    });
+
+    $('#refresh-wifi-status').click(function() {
+        updateStatus();
+    });
+
+    // HLS Stream Check
+    $('#check-hls').click(function() {
+        const streamName = $('#stream-name').val() || 'live';
+        const button = $(this);
+        button.text('Checking...').prop('disabled', true);
+        
+        $.get(`/api/stream/hls/${streamName}`, function(data) {
+            if (data.available) {
+                alert(`HLS stream is available!\nURL: ${data.url}\nContent preview:\n${data.content_preview}`);
+            } else {
+                alert(`HLS stream not available:\n${data.error}`);
+            }
+        }).fail(function() {
+            alert('Failed to check HLS stream availability');
+        }).always(function() {
+            button.text('Check HLS').prop('disabled', false);
+        });
+    });
+});
+</script>
+</body>
+</html>
