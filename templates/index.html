@@ -383,6 +383,7 @@
                 <h2 class="text-xl font-bold">Stream Preview</h2>
                 <div class="space-x-2">
                     <button id="check-hls" class="btn btn-blue">Check HLS</button>
+                    <button id="debug-hls" class="btn btn-blue">Debug HLS</button>
                     <button id="toggle-preview" class="btn btn-blue">Enable Preview</button>
                 </div>
             </div>
@@ -817,7 +818,7 @@ $(document).ready(function() {
             const hlsUrl = `http://${ip}:8080/${name}/index.m3u8`;
             
             // Configure video element for low latency
-            video.src = hlsUrl;
+            // Don't set src directly - let HLS detection logic handle it
             
             // Set low latency attributes
             video.setAttribute('playsinline', '');
@@ -829,10 +830,9 @@ $(document).ready(function() {
                 video.lowLatency = true;
             }
             
-            // Reduce buffering
-            if (video.buffered) {
-                video.preload = 'none';
-            }
+            // Clear any existing source
+            video.src = '';
+            video.preload = 'metadata';
             
             container.removeClass('hidden');
             disabled.addClass('hidden');
@@ -856,6 +856,10 @@ $(document).ready(function() {
             
             // Check if HLS stream is available before trying to load
             const streamName = $('#stream-name').val() || 'live';
+            
+            // First, test if the HLS URL is reachable
+            console.log('Testing HLS URL:', hlsUrl);
+            
             $.get(`/api/stream/hls/${streamName}`, function(data) {
                 if (data.available) {
                     console.log('HLS stream is available:', data.url);
@@ -893,12 +897,31 @@ $(document).ready(function() {
                             });
                         });
                         
+                        // Add error handling for HLS.js
+                        hls.on(Hls.Events.ERROR, function(event, data) {
+                            console.error('HLS.js error:', data);
+                            if (data.fatal) {
+                                switch(data.type) {
+                                    case Hls.ErrorTypes.NETWORK_ERROR:
+                                        container.prepend('<div class="text-red-400 text-sm mb-2">Network error loading stream. Check if stream is running.</div>');
+                                        break;
+                                    case Hls.ErrorTypes.MEDIA_ERROR:
+                                        container.prepend('<div class="text-red-400 text-sm mb-2">Media error. Stream format may be incompatible.</div>');
+                                        break;
+                                    default:
+                                        container.prepend('<div class="text-red-400 text-sm mb-2">Fatal error loading HLS stream.</div>');
+                                        break;
+                                }
+                            }
+                        });
+                        
                         // Store hls instance for cleanup
                         video.hlsInstance = hls;
                         
                     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
                         // Native HLS support (Safari)
                         console.log('Using native HLS support');
+                        video.src = hlsUrl;
                         video.load();
                         
                         setTimeout(() => {
@@ -912,6 +935,7 @@ $(document).ready(function() {
                         container.prepend('<div class="text-yellow-400 text-sm mb-2">HLS may not be supported in this browser. Consider using Chrome or Safari.</div>');
                         
                         // Try anyway with native video element
+                        video.src = hlsUrl;
                         video.load();
                         setTimeout(() => {
                             video.play().catch(e => {
@@ -923,6 +947,32 @@ $(document).ready(function() {
                 } else {
                     console.error('HLS stream not available:', data.error);
                     container.prepend(`<div class="text-red-400 text-sm mb-2">HLS stream not available: ${data.error}</div>`);
+                    
+                    // Try direct URL test
+                    console.log('Attempting direct HLS URL test:', hlsUrl);
+                    fetch(hlsUrl)
+                        .then(response => {
+                            if (response.ok) {
+                                console.log('Direct HLS URL is reachable, trying to load anyway');
+                                // Try to load anyway since URL is reachable
+                                if (typeof Hls !== 'undefined' && Hls.isSupported()) {
+                                    const hls = new Hls();
+                                    hls.loadSource(hlsUrl);
+                                    hls.attachMedia(video);
+                                    video.hlsInstance = hls;
+                                } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                                    video.src = hlsUrl;
+                                    video.load();
+                                }
+                            } else {
+                                console.error('Direct HLS URL test failed:', response.status);
+                                container.prepend(`<div class="text-red-400 text-sm mb-2">HLS URL not reachable (${response.status})</div>`);
+                            }
+                        })
+                        .catch(e => {
+                            console.error('Direct HLS URL test error:', e);
+                            container.prepend('<div class="text-red-400 text-sm mb-2">Cannot reach HLS URL - check if stream is running</div>');
+                        });
                 }
             }).fail(function() {
                 console.error('Failed to check HLS stream availability');
@@ -953,8 +1003,34 @@ $(document).ready(function() {
             const name = $(this).val() || 'live';
             const hlsUrl = `http://${ip}:8080/${name}/index.m3u8`;
             const video = $('#stream-preview')[0];
-            video.src = hlsUrl;
-            video.load();
+            
+            // Clean up existing HLS instance
+            if (video.hlsInstance) {
+                video.hlsInstance.destroy();
+                video.hlsInstance = null;
+            }
+            
+            // Reload with new URL using proper HLS handling
+            if (typeof Hls !== 'undefined' && Hls.isSupported()) {
+                const hls = new Hls({
+                    lowLatencyMode: true,
+                    backBufferLength: 90,
+                    maxBufferLength: 10,
+                    maxMaxBufferLength: 20,
+                    liveSyncDurationCount: 1,
+                    liveMaxLatencyDurationCount: 2
+                });
+                
+                hls.loadSource(hlsUrl);
+                hls.attachMedia(video);
+                video.hlsInstance = hls;
+            } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                video.src = hlsUrl;
+                video.load();
+            } else {
+                video.src = hlsUrl;
+                video.load();
+            }
         }
     });
 
@@ -1352,6 +1428,74 @@ $(document).ready(function() {
 
     $('#refresh-wifi-status').click(function() {
         updateStatus();
+    });
+
+    // Debug HLS functionality
+    $('#debug-hls').click(function() {
+        const button = $(this);
+        button.text('Debugging...').prop('disabled', true);
+        
+        const streamName = $('#stream-name').val() || 'live';
+        const ip = window.location.hostname || 'localhost';
+        const hlsUrl = `http://${ip}:8080/${streamName}/index.m3u8`;
+        
+        let debugInfo = `🔍 HLS Debug Information:\n\n`;
+        debugInfo += `Stream Name: ${streamName}\n`;
+        debugInfo += `HLS URL: ${hlsUrl}\n`;
+        debugInfo += `Browser: ${navigator.userAgent}\n\n`;
+        
+        // Test HLS.js support
+        if (typeof Hls !== 'undefined') {
+            debugInfo += `HLS.js Library: ✅ Loaded (v${Hls.version || 'unknown'})\n`;
+            debugInfo += `HLS.js Supported: ${Hls.isSupported() ? '✅ Yes' : '❌ No'}\n`;
+        } else {
+            debugInfo += `HLS.js Library: ❌ Not loaded\n`;
+        }
+        
+        // Test native HLS support
+        const video = document.createElement('video');
+        const nativeSupport = video.canPlayType('application/vnd.apple.mpegurl');
+        debugInfo += `Native HLS Support: ${nativeSupport ? '✅ Yes' : '❌ No'}\n\n`;
+        
+        // Test direct URL access
+        debugInfo += `Testing direct URL access...\n`;
+        
+        fetch(hlsUrl)
+            .then(response => {
+                debugInfo += `URL Response: ${response.status} ${response.statusText}\n`;
+                debugInfo += `Content-Type: ${response.headers.get('content-type') || 'Unknown'}\n`;
+                
+                if (response.ok) {
+                    return response.text();
+                } else {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+            })
+            .then(content => {
+                debugInfo += `Content Length: ${content.length} bytes\n`;
+                debugInfo += `Content Preview:\n${content.substring(0, 200)}${content.length > 200 ? '...' : ''}\n\n`;
+                
+                if (content.includes('#EXTM3U')) {
+                    debugInfo += `✅ Valid M3U8 playlist detected\n`;
+                } else {
+                    debugInfo += `❌ Invalid M3U8 content\n`;
+                }
+                
+                alert(debugInfo);
+            })
+            .catch(error => {
+                debugInfo += `❌ URL Access Failed: ${error.message}\n\n`;
+                debugInfo += `Possible causes:\n`;
+                debugInfo += `• Stream is not running\n`;
+                debugInfo += `• MediaMTX is not running\n`;
+                debugInfo += `• Port 8080 is blocked\n`;
+                debugInfo += `• CORS issues\n`;
+                
+                alert(debugInfo);
+            })
+            .finally(() => {
+                button.text('Debug HLS').prop('disabled', false);
+            });
     });
 
     // HLS Stream Check
