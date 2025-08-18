@@ -20,6 +20,16 @@ import logging
 import shutil
 from logging.handlers import RotatingFileHandler
 
+try:
+    import psutil
+except ImportError:
+    logging.warning("psutil not available, system monitoring will be limited")
+    # Create dummy psutil for compatibility
+    class DummyPsutil:
+        def cpu_percent(self, interval=1): return 0
+        def virtual_memory(self): return type('obj', (object,), {'percent': 0})
+    psutil = DummyPsutil()
+
 from flask import Flask, render_template, jsonify, request
 
 # --- Configuration ---
@@ -217,13 +227,28 @@ def get_wifi_status():
         logging.error(f"Failed to get WiFi status: {e}")
         return {"connected": False, "error": str(e)}
 
-def connect_to_wifi(ssid, password=None):
-    """Connects to a WiFi network."""
+def connect_to_wifi(ssid, password=None, security_type=None):
+    """Connects to a WiFi network with specified security type."""
     try:
-        if password:
-            result = run_command(f"nmcli dev wifi connect '{ssid}' password '{password}'")
-        else:
+        # Build nmcli command based on security type
+        if security_type and security_type.lower() == "wep":
+            # WEP networks
+            if password:
+                result = run_command(f"nmcli dev wifi connect '{ssid}' password '{password}' wep-key-type key")
+            else:
+                return {"success": False, "message": "WEP networks require a password"}
+        elif security_type and "wpa" in security_type.lower():
+            # WPA/WPA2 networks (default behavior)
+            if password:
+                result = run_command(f"nmcli dev wifi connect '{ssid}' password '{password}'")
+            else:
+                return {"success": False, "message": "WPA networks require a password"}
+        elif not password or security_type == "Open":
+            # Open networks
             result = run_command(f"nmcli dev wifi connect '{ssid}'")
+        else:
+            # Default case with password
+            result = run_command(f"nmcli dev wifi connect '{ssid}' password '{password}'")
         
         if result and "successfully activated" in result:
             return {"success": True, "message": f"Connected to {ssid}"}
@@ -232,6 +257,98 @@ def connect_to_wifi(ssid, password=None):
     except Exception as e:
         logging.error(f"Failed to connect to WiFi {ssid}: {e}")
         return {"success": False, "message": str(e)}
+
+def add_wifi_network(ssid, password=None, security_type="WPA2"):
+    """Manually adds a WiFi network configuration."""
+    try:
+        # Create connection profile
+        if security_type.upper() == "OPEN":
+            result = run_command(f"nmcli con add type wifi con-name '{ssid}' ifname '*' ssid '{ssid}'")
+        elif security_type.upper() == "WEP":
+            if not password:
+                return {"success": False, "message": "WEP networks require a password"}
+            result = run_command(f"nmcli con add type wifi con-name '{ssid}' ifname '*' ssid '{ssid}' wifi-sec.key-mgmt none wifi-sec.wep-key0 '{password}'")
+        else:  # WPA/WPA2/WPA3
+            if not password:
+                return {"success": False, "message": f"{security_type} networks require a password"}
+            result = run_command(f"nmcli con add type wifi con-name '{ssid}' ifname '*' ssid '{ssid}' wifi-sec.key-mgmt wpa-psk wifi-sec.psk '{password}'")
+        
+        if result and ("successfully added" in result or "Connection" in result):
+            # Try to activate the connection
+            activate_result = run_command(f"nmcli con up '{ssid}'")
+            if activate_result and "successfully activated" in activate_result:
+                return {"success": True, "message": f"Added and connected to {ssid}"}
+            else:
+                return {"success": True, "message": f"Added {ssid} but connection failed: {activate_result}"}
+        else:
+            return {"success": False, "message": result or "Failed to add network"}
+    except Exception as e:
+        logging.error(f"Failed to add WiFi network {ssid}: {e}")
+        return {"success": False, "message": str(e)}
+
+def get_tailscale_auth_url():
+    """Initializes Tailscale and returns the authentication URL."""
+    try:
+        # Check if tailscale is installed
+        version_check = run_command("tailscale version")
+        if not version_check:
+            return {"success": False, "message": "Tailscale is not installed"}
+        
+        # Run tailscale up to get auth URL
+        result = run_command("sudo tailscale up --auth-key= --timeout=30s")
+        
+        # Parse the output for the auth URL
+        if result and "https://login.tailscale.com" in result:
+            # Extract the URL from the output
+            import re
+            url_match = re.search(r'https://login\.tailscale\.com/[^\s]+', result)
+            if url_match:
+                auth_url = url_match.group(0)
+                return {"success": True, "auth_url": auth_url, "message": "Visit the URL to authenticate"}
+            else:
+                return {"success": False, "message": "Could not extract auth URL from output"}
+        else:
+            # Try alternative approach - check if already authenticated
+            status = get_tailscale_status()
+            if status.get("connected"):
+                return {"success": True, "message": "Tailscale is already connected", "already_connected": True}
+            else:
+                return {"success": False, "message": result or "Failed to initialize Tailscale"}
+    except Exception as e:
+        logging.error(f"Failed to initialize Tailscale: {e}")
+        return {"success": False, "message": str(e)}
+
+def reset_tailscale():
+    """Resets Tailscale connection to allow switching tailnets."""
+    try:
+        # Logout from current tailnet
+        logout_result = run_command("sudo tailscale logout")
+        
+        # Reset the state
+        reset_result = run_command("sudo tailscale down")
+        
+        return {"success": True, "message": "Tailscale has been reset. You can now initialize with a new tailnet."}
+    except Exception as e:
+        logging.error(f"Failed to reset Tailscale: {e}")
+        return {"success": False, "message": str(e)}
+
+def check_tailscale_installed():
+    """Checks if Tailscale is installed and configured."""
+    try:
+        version_result = run_command("tailscale version")
+        if version_result:
+            status = get_tailscale_status()
+            return {
+                "installed": True,
+                "version": version_result.split('\n')[0] if version_result else "Unknown",
+                "configured": status.get("connected", False),
+                "status": status
+            }
+        else:
+            return {"installed": False, "configured": False}
+    except Exception as e:
+        logging.error(f"Failed to check Tailscale installation: {e}")
+        return {"installed": False, "configured": False, "error": str(e)}
 
 
 def get_device_temperature():
@@ -673,11 +790,44 @@ def wifi_connect():
     data = request.json
     ssid = data.get("ssid")
     password = data.get("password")
+    security_type = data.get("security_type")
     
     if not ssid:
         return jsonify({"success": False, "message": "SSID is required"}), 400
     
-    result = connect_to_wifi(ssid, password)
+    result = connect_to_wifi(ssid, password, security_type)
+    return jsonify(result)
+
+@app.route("/api/wifi/add", methods=["POST"])
+def wifi_add_network():
+    """Manually adds a WiFi network."""
+    data = request.json
+    ssid = data.get("ssid")
+    password = data.get("password")
+    security_type = data.get("security_type", "WPA2")
+    
+    if not ssid:
+        return jsonify({"success": False, "message": "SSID is required"}), 400
+    
+    result = add_wifi_network(ssid, password, security_type)
+    return jsonify(result)
+
+@app.route("/api/tailscale/init", methods=["POST"])
+def tailscale_init():
+    """Initializes Tailscale and returns authentication URL."""
+    result = get_tailscale_auth_url()
+    return jsonify(result)
+
+@app.route("/api/tailscale/reset", methods=["POST"])
+def tailscale_reset():
+    """Resets Tailscale to allow switching tailnets."""
+    result = reset_tailscale()
+    return jsonify(result)
+
+@app.route("/api/tailscale/check")
+def tailscale_check():
+    """Checks Tailscale installation and configuration status."""
+    result = check_tailscale_installed()
     return jsonify(result)
 
 
@@ -1404,16 +1554,7 @@ if __name__ == "__main__":
     
     logging.info("Logger configured successfully.")
 
-    try:
-        import psutil
-    except ImportError:
-        logging.critical("psutil is not installed! CPU and Memory usage will not be available.")
-        logging.critical("Please run the setup script or install with: pip install psutil")
-        # Create dummy functions if psutil is not available
-        class DummyPsutil:
-            def cpu_percent(self, interval): return "N/A"
-            def virtual_memory(self): return type('obj', (object,), {'percent': "N/A"})
-        psutil = DummyPsutil()
+    # psutil is now imported at the top of the file
 
     # Check for auto-start configuration and start stream if enabled
     auto_start_thread = threading.Thread(target=auto_start_stream)

@@ -336,13 +336,37 @@
                 <div class="flex space-x-2 mb-4">
                     <button id="scan-wifi" class="btn btn-blue flex-1">Scan Networks</button>
                     <button id="refresh-wifi-status" class="btn btn-blue flex-1">Refresh Status</button>
+                    <button id="add-wifi-manual" class="btn btn-green flex-1">Add Network</button>
                 </div>
                 <div id="wifi-networks" class="space-y-2 max-h-48 overflow-y-auto">
                     <p class="text-gray-400">Click "Scan Networks" to find available WiFi</p>
                 </div>
+                
+                <!-- Manual WiFi Add Form -->
+                <div id="wifi-add-form" class="hidden mt-4 p-4 bg-gray-700 rounded">
+                    <h4 class="font-bold mb-2">Add WiFi Network Manually</h4>
+                    <div class="space-y-2">
+                        <input type="text" id="manual-ssid" placeholder="Network SSID" class="w-full p-2 rounded input-field">
+                        <input type="password" id="manual-password" placeholder="Password (leave empty for open networks)" class="w-full p-2 rounded input-field">
+                        <select id="manual-security" class="w-full p-2 rounded input-field">
+                            <option value="WPA2">WPA2 (Most common)</option>
+                            <option value="WPA3">WPA3 (Modern)</option>
+                            <option value="WPA">WPA (Legacy)</option>
+                            <option value="WEP">WEP (Very old)</option>
+                            <option value="Open">Open (No security)</option>
+                        </select>
+                    </div>
+                    <div class="flex space-x-2 mt-3">
+                        <button id="wifi-add-btn" class="btn btn-green flex-1">Add & Connect</button>
+                        <button id="wifi-add-cancel-btn" class="btn btn-red flex-1">Cancel</button>
+                    </div>
+                </div>
+                
+                <!-- WiFi Connect Form -->
                 <div id="wifi-connect-form" class="hidden mt-4 p-4 bg-gray-700 rounded">
                     <h4 class="font-bold mb-2">Connect to Network</h4>
                     <p class="text-sm mb-2">Network: <span id="connect-ssid"></span></p>
+                    <p class="text-sm mb-2">Security: <span id="connect-security"></span></p>
                     <input type="password" id="wifi-password" placeholder="Password (leave empty for open networks)" class="w-full p-2 rounded input-field mb-2">
                     <div class="flex space-x-2">
                         <button id="wifi-connect-btn" class="btn btn-green flex-1">Connect</button>
@@ -354,7 +378,7 @@
             <!-- Tailscale Management -->
             <div>
                 <h3 class="font-bold mb-2">Tailscale VPN</h3>
-                <div class="space-y-2">
+                <div class="space-y-2 mb-4">
                     <div class="flex justify-between">
                         <span>Status:</span>
                         <span id="tailscale-detailed-status" class="text-gray-400">Unknown</span>
@@ -367,10 +391,29 @@
                         <span>Hostname:</span>
                         <span id="tailscale-hostname" class="text-gray-400">N/A</span>
                     </div>
+                    <div class="flex justify-between">
+                        <span>Version:</span>
+                        <span id="tailscale-version" class="text-gray-400">N/A</span>
+                    </div>
                 </div>
+                
+                <div class="space-y-2">
+                    <button id="tailscale-init" class="btn btn-green w-full">Initialize Tailscale</button>
+                    <button id="tailscale-reset" class="btn btn-red w-full">Reset (Change Tailnet)</button>
+                </div>
+                
+                <!-- Tailscale Auth Display -->
+                <div id="tailscale-auth-info" class="hidden mt-4 p-4 bg-gray-700 rounded">
+                    <h4 class="font-bold mb-2">Tailscale Authentication</h4>
+                    <p class="text-sm mb-2">Visit this URL to authenticate:</p>
+                    <div class="bg-gray-800 p-2 rounded mb-2">
+                        <a id="tailscale-auth-url" href="#" target="_blank" class="text-blue-400 text-xs break-all">Loading...</a>
+                    </div>
+                    <button id="tailscale-auth-close" class="btn btn-blue w-full">Close</button>
+                </div>
+                
                 <div class="mt-4">
-                    <p class="text-sm text-gray-400 mb-2">To connect Tailscale, run in terminal:</p>
-                    <code class="bg-gray-800 p-2 rounded block text-sm">sudo tailscale up</code>
+                    <p class="text-sm text-gray-400">Tailscale provides secure remote access to your device from anywhere.</p>
                 </div>
             </div>
         </div>
@@ -1381,6 +1424,7 @@ $(document).ready(function() {
 
     function showWifiConnectForm(ssid, security) {
         $('#connect-ssid').text(ssid);
+        $('#connect-security').text(security);
         $('#wifi-password').val('');
         
         if (security === 'Open') {
@@ -1390,11 +1434,13 @@ $(document).ready(function() {
         }
         
         $('#wifi-connect-form').removeClass('hidden');
+        $('#wifi-add-form').addClass('hidden');
     }
 
     $('#wifi-connect-btn').click(function() {
         const ssid = $('#connect-ssid').text();
         const password = $('#wifi-password').val();
+        const security = $('#connect-security').text();
         const button = $(this);
         
         button.text('Connecting...').prop('disabled', true);
@@ -1403,7 +1449,11 @@ $(document).ready(function() {
             url: '/api/wifi/connect',
             type: 'POST',
             contentType: 'application/json',
-            data: JSON.stringify({ssid: ssid, password: password}),
+            data: JSON.stringify({
+                ssid: ssid, 
+                password: password,
+                security_type: security
+            }),
             success: function(data) {
                 if (data.success) {
                     alert(`Successfully connected to ${ssid}`);
@@ -1425,6 +1475,147 @@ $(document).ready(function() {
     $('#wifi-cancel-btn').click(function() {
         $('#wifi-connect-form').addClass('hidden');
     });
+
+    // Manual WiFi Network Addition
+    $('#add-wifi-manual').click(function() {
+        $('#wifi-add-form').removeClass('hidden');
+        $('#wifi-connect-form').addClass('hidden');
+        $('#manual-ssid').val('');
+        $('#manual-password').val('');
+        $('#manual-security').val('WPA2');
+    });
+
+    $('#wifi-add-btn').click(function() {
+        const ssid = $('#manual-ssid').val().trim();
+        const password = $('#manual-password').val();
+        const security = $('#manual-security').val();
+        const button = $(this);
+        
+        if (!ssid) {
+            alert('Please enter a network SSID');
+            return;
+        }
+        
+        button.text('Adding...').prop('disabled', true);
+        
+        $.ajax({
+            url: '/api/wifi/add',
+            type: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({
+                ssid: ssid,
+                password: password,
+                security_type: security
+            }),
+            success: function(data) {
+                if (data.success) {
+                    alert(`Successfully added network: ${data.message}`);
+                    $('#wifi-add-form').addClass('hidden');
+                    updateStatus();
+                } else {
+                    alert(`Failed to add network: ${data.message}`);
+                }
+            },
+            error: function() {
+                alert('Failed to add network');
+            },
+            complete: function() {
+                button.text('Add & Connect').prop('disabled', false);
+            }
+        });
+    });
+
+    $('#wifi-add-cancel-btn').click(function() {
+        $('#wifi-add-form').addClass('hidden');
+    });
+
+    // Tailscale Management
+    function updateTailscaleStatus() {
+        $.get('/api/tailscale/check', function(data) {
+            if (data.installed) {
+                $('#tailscale-version').text(data.version || 'Unknown');
+                if (data.configured) {
+                    $('#tailscale-detailed-status').text('Connected');
+                    $('#tailscale-init').text('Reinitialize').removeClass('btn-green').addClass('btn-blue');
+                } else {
+                    $('#tailscale-detailed-status').text('Not Connected');
+                    $('#tailscale-init').text('Initialize Tailscale').removeClass('btn-blue').addClass('btn-green');
+                }
+            } else {
+                $('#tailscale-version').text('Not Installed');
+                $('#tailscale-detailed-status').text('Not Installed');
+                $('#tailscale-init').text('Install Required').prop('disabled', true);
+            }
+        });
+    }
+
+    $('#tailscale-init').click(function() {
+        const button = $(this);
+        button.text('Initializing...').prop('disabled', true);
+        
+        $.ajax({
+            url: '/api/tailscale/init',
+            type: 'POST',
+            success: function(data) {
+                if (data.success) {
+                    if (data.already_connected) {
+                        alert('Tailscale is already connected!');
+                    } else if (data.auth_url) {
+                        $('#tailscale-auth-url').attr('href', data.auth_url).text(data.auth_url);
+                        $('#tailscale-auth-info').removeClass('hidden');
+                        alert('Tailscale initialization started. Please visit the authentication URL.');
+                    } else {
+                        alert(data.message);
+                    }
+                    updateTailscaleStatus();
+                } else {
+                    alert(`Failed to initialize Tailscale: ${data.message}`);
+                }
+            },
+            error: function() {
+                alert('Failed to initialize Tailscale');
+            },
+            complete: function() {
+                button.text('Initialize Tailscale').prop('disabled', false);
+            }
+        });
+    });
+
+    $('#tailscale-reset').click(function() {
+        if (!confirm('This will disconnect from your current Tailnet. Are you sure?')) {
+            return;
+        }
+        
+        const button = $(this);
+        button.text('Resetting...').prop('disabled', true);
+        
+        $.ajax({
+            url: '/api/tailscale/reset',
+            type: 'POST',
+            success: function(data) {
+                if (data.success) {
+                    alert('Tailscale has been reset. You can now initialize with a new Tailnet.');
+                    updateTailscaleStatus();
+                } else {
+                    alert(`Failed to reset Tailscale: ${data.message}`);
+                }
+            },
+            error: function() {
+                alert('Failed to reset Tailscale');
+            },
+            complete: function() {
+                button.text('Reset (Change Tailnet)').prop('disabled', false);
+            }
+        });
+    });
+
+    $('#tailscale-auth-close').click(function() {
+        $('#tailscale-auth-info').addClass('hidden');
+        updateTailscaleStatus();
+    });
+
+    // Initialize Tailscale status on page load
+    updateTailscaleStatus();
 
     $('#refresh-wifi-status').click(function() {
         updateStatus();
