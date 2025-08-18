@@ -1,4 +1,4 @@
-# RCSM - Radxa Camera Stream Manager
+# RCSM - RockChip Stream Manager
 
 A web-based interface for managing camera streams on Radxa single-board computers. This application provides an intuitive way to start, stop, and monitor camera streams with real-time status updates.
 
@@ -14,7 +14,7 @@ A web-based interface for managing camera streams on Radxa single-board computer
 
 ### Prerequisites
 
-- Radxa single-board computer (Rock 5B, Rock 4, etc.)
+- RockChip single-board computer (Rock 5B, Rock 4, etc.)
 - Python 3.6 or higher
 - Camera connected to your Radxa device
 
@@ -33,7 +33,7 @@ That's it! The installer will:
 
 **Access the web interface:**
 ```
-http://your-radxa-ip:5000
+http://your-radxa-ip:80
 ```
 
 The setup script handles everything automatically - no need to clone the repository or manually start services.
@@ -58,7 +58,7 @@ The web interface provides:
 
 ## Configuration
 
-The application uses default settings that work with most Radxa camera setups. For custom configurations, modify the stream parameters in `radxa_stream_manager.py`:
+The application uses default settings that work with most RockChip setups. For custom configurations, modify the stream parameters in `radxa_stream_manager.py`:
 
 ```python
 # Example stream command customization
@@ -69,7 +69,7 @@ stream_command = [
     '!', 'videoconvert',
     '!', 'x264enc', 'tune=zerolatency',
     '!', 'rtph264pay',
-    '!', 'udpsink', 'host=0.0.0.0', 'port=5000'
+    '!', 'udpsink', 'host=0.0.0.0', 'port=80'
 ]
 ```
 
@@ -84,8 +84,8 @@ stream_command = [
 
 **Web interface not accessible:**
 - Check if the application is running: `ps aux | grep python`
-- Verify firewall settings allow port 5000
-- Try accessing via localhost: `http://localhost:5000`
+- Verify firewall settings allow port 80
+- Try accessing via localhost: `http://localhost:80`
 
 **Permission errors:**
 - Run setup script with appropriate permissions
