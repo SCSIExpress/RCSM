@@ -158,14 +158,14 @@ Specific instructions vary by camera model. Consult your camera documentation.
 
 ### Firewall Setup
 
-Allow access to port 5000:
+Allow access to port 80:
 
 ```bash
 # UFW (Ubuntu/Debian)
-sudo ufw allow 5000
+sudo ufw allow 80
 
 # iptables
-sudo iptables -A INPUT -p tcp --dport 5000 -j ACCEPT
+sudo iptables -A INPUT -p tcp --dport 80 -j ACCEPT
 ```
 
 ### Static IP (Optional)
@@ -311,7 +311,7 @@ python3 radxa_stream_manager.py
 ```
 
 5. **Test web interface:**
-Open browser to `http://localhost:5000`
+Open browser to `http://localhost:80`
 
 ## Performance Optimization
 

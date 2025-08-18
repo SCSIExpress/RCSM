@@ -6,6 +6,7 @@
     <title>Radxa Zero 3E Stream Manager</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
     <style>
         body {
             background-color: #1a202c;
@@ -245,6 +246,9 @@
                         <span>Auto-start with last configuration on service load</span>
                     </label>
                 </div>
+                <div id="config-status" class="text-sm text-gray-400 mb-2">
+                    Checking saved configuration...
+                </div>
             </div>
 
             <div class="mt-6">
@@ -383,10 +387,15 @@
                 </div>
             </div>
             <div id="preview-container" class="hidden">
-                <video id="stream-preview" class="w-full max-w-2xl mx-auto rounded" controls muted>
+                <video id="stream-preview" class="w-full max-w-2xl mx-auto rounded" controls muted autoplay playsinline>
                     <p class="text-center text-gray-400">Your browser doesn't support video playback.</p>
                 </video>
-                <p class="text-sm text-gray-400 mt-2 text-center">Preview uses HLS - there may be a 5-10 second delay</p>
+                <div class="text-center mt-2">
+                    <p class="text-sm text-gray-400">Low latency HLS preview</p>
+                    <div id="latency-info" class="text-xs text-gray-500 mt-1">
+                        Latency info will appear here when stream starts
+                    </div>
+                </div>
             </div>
             <div id="preview-disabled" class="text-center text-gray-400 py-8">
                 <p>Preview disabled to save resources</p>
@@ -402,7 +411,13 @@
             <button id="run-system-test" class="btn btn-blue">Run System Test</button>
             <button id="refresh-log" class="btn btn-blue">Refresh App Log</button>
             <button id="refresh-mediamtx-log" class="btn btn-blue">MediaMTX Logs</button>
+            <button id="test-autostart" class="btn btn-blue">Test Auto-Start</button>
+            <button id="test-update-connection" class="btn btn-blue">Test Update Connection</button>
             <button id="check-updates" class="btn btn-green">Check for Updates</button>
+        </div>
+        
+        <div id="version-info" class="text-sm text-gray-400 mb-4">
+            Loading version information...
         </div>
         
         <h3 class="font-bold mb-2">Test Results:</h3>
@@ -423,11 +438,18 @@ $(document).ready(function() {
     loadVideoDevices();
     updatePlaybackUrl();
     refreshLog();
-    loadConfiguration();
+    checkConfigurationStatus();
+    loadVersionInfo();
+    
+    // Load saved configuration after a short delay to allow video devices to load
+    setTimeout(function() {
+        loadConfiguration();
+    }, 1000);
 
     // --- Periodic Updates ---
     setInterval(updateStatus, 2000); 
     setInterval(updateStreamStats, 2000);
+    setInterval(updateLatencyInfo, 10000); // Update latency info every 10 seconds
 
     // --- Functions ---
     function getVideoErrorMessage(errorCode) {
@@ -617,6 +639,52 @@ $(document).ready(function() {
         });
     });
 
+    $('#test-autostart').click(function() {
+        const button = $(this);
+        button.text('Testing...').prop('disabled', true);
+        
+        $.post('/api/config/test-autostart', function(data) {
+            alert('Auto-start test initiated. Check the logs and stream status.');
+            setTimeout(refreshLog, 1000);
+            setTimeout(updateStatus, 2000);
+        }).fail(function(xhr) {
+            const errorMessage = xhr.responseJSON ? xhr.responseJSON.message : 'Test failed';
+            alert('Auto-start test failed: ' + errorMessage);
+        }).always(function() {
+            button.text('Test Auto-Start').prop('disabled', false);
+        });
+    });
+
+    $('#test-update-connection').click(function() {
+        const button = $(this);
+        button.text('Testing...').prop('disabled', true);
+        
+        $.get('/api/update/test-connection', function(data) {
+            let message = '🔍 Update Connection Test Results:\n\n';
+            message += `Internet Connection: ${data.internet_connection ? '✅ OK' : '❌ Failed'}\n`;
+            message += `GitHub API: ${data.github_api ? '✅ OK' : '❌ Failed'}`;
+            if (data.github_error) message += ` (${data.github_error})`;
+            message += `\nRepository Access: ${data.repository_access ? '✅ OK' : '❌ Failed'}`;
+            if (data.repository_error) message += ` (${data.repository_error})`;
+            message += `\nWrite Permission: ${data.write_permission ? '✅ OK' : '❌ Failed'}\n`;
+            message += `Git Available: ${data.git_available ? '✅ Yes' : '⚠️ No'}\n`;
+            message += `\nCurrent Directory: ${data.current_directory}`;
+            
+            if (data.internet_connection && data.github_api && data.repository_access && data.write_permission) {
+                message += '\n\n✅ All checks passed! Update functionality should work.';
+            } else {
+                message += '\n\n❌ Some checks failed. Update functionality may not work properly.';
+            }
+            
+            alert(message);
+        }).fail(function(xhr) {
+            const errorMessage = xhr.responseJSON ? xhr.responseJSON.error : 'Connection test failed';
+            alert(`❌ Connection test failed: ${errorMessage}`);
+        }).always(function() {
+            button.text('Test Update Connection').prop('disabled', false);
+        });
+    });
+
     // Update functionality
     $('#check-updates').click(function() {
         const button = $(this);
@@ -629,21 +697,38 @@ $(document).ready(function() {
             type: "POST",
             success: function(data) {
                 if (data.status === 'up_to_date') {
-                    alert(`✅ Application is up to date!\n\nCurrent: ${data.current_commit}\nLatest: ${data.latest_commit}`);
+                    const message = `✅ Application is up to date!\n\n` +
+                        `Current: ${data.current_commit || 'Unknown'}\n` +
+                        `Latest: ${data.latest_commit}\n` +
+                        `Message: ${data.commit_message}\n` +
+                        `Date: ${data.commit_date}`;
+                    alert(message);
                 } else if (data.status === 'success') {
-                    const message = `✅ Update successful!\n\n` +
+                    let message = `✅ Update successful!\n\n` +
                         `Updated ${data.updated_files.length} files:\n` +
                         `${data.updated_files.join('\n')}\n\n` +
                         `Latest commit: ${data.latest_commit}\n` +
-                        `Message: ${data.commit_message}\n\n` +
-                        `Backup created at: ${data.backup_location}\n\n` +
-                        `${data.restart_attempted ? 'Service restart attempted.' : data.restart_note}`;
+                        `Message: ${data.commit_message}\n` +
+                        `Date: ${data.commit_date}\n\n` +
+                        `Backup created at: ${data.backup_location}\n\n`;
+                    
+                    // Add previous commit info if available
+                    if (data.previous_commit) {
+                        message += `Previous commit: ${data.previous_commit}\n\n`;
+                    }
+                    
+                    // Add warnings if any
+                    if (data.warnings && data.warnings.length > 0) {
+                        message += `⚠️ Warnings:\n${data.warnings.join('\n')}\n\n`;
+                    }
+                    
+                    message += `${data.restart_attempted ? 'Service restart attempted.' : data.restart_note}`;
                     
                     alert(message);
                     
                     // If service restart was attempted, show a countdown and reload
                     if (data.restart_attempted) {
-                        let countdown = 10;
+                        let countdown = 15; // Longer countdown for restart
                         const countdownInterval = setInterval(() => {
                             button.text(`Reloading in ${countdown}s...`);
                             countdown--;
@@ -688,7 +773,24 @@ $(document).ready(function() {
             const name = $('#stream-name').val() || 'live';
             const hlsUrl = `http://${ip}:8080/${name}/index.m3u8`;
             
+            // Configure video element for low latency
             video.src = hlsUrl;
+            
+            // Set low latency attributes
+            video.setAttribute('playsinline', '');
+            video.setAttribute('webkit-playsinline', '');
+            video.muted = true; // Required for autoplay in most browsers
+            
+            // Optimize for low latency
+            if (video.hasOwnProperty('lowLatency')) {
+                video.lowLatency = true;
+            }
+            
+            // Reduce buffering
+            if (video.buffered) {
+                video.preload = 'none';
+            }
+            
             container.removeClass('hidden');
             disabled.addClass('hidden');
             button.text('Disable Preview').removeClass('btn-blue').addClass('btn-red');
@@ -714,14 +816,67 @@ $(document).ready(function() {
             $.get(`/api/stream/hls/${streamName}`, function(data) {
                 if (data.available) {
                     console.log('HLS stream is available:', data.url);
-                    // Try to load and play
-                    video.load();
-                    setTimeout(() => {
-                        video.play().catch(e => {
-                            console.log('Autoplay prevented or stream not available:', e);
-                            container.prepend('<div class="text-yellow-400 text-sm mb-2">Click play button to start preview (autoplay blocked)</div>');
+                    
+                    // Update latency info display
+                    if (data.latency_info) {
+                        const info = data.latency_info;
+                        let latencyText = `Estimated latency: ${info.estimated_latency_seconds || 'Unknown'}s`;
+                        if (info.low_latency_hls) {
+                            latencyText += ' (LL-HLS enabled)';
+                        }
+                        $('#latency-info').text(latencyText);
+                    }
+                    
+                    // Check if HLS.js is supported for better low latency
+                    if (typeof Hls !== 'undefined' && Hls.isSupported()) {
+                        console.log('Using HLS.js for low latency playback');
+                        const hls = new Hls({
+                            lowLatencyMode: true,
+                            backBufferLength: 90,
+                            maxBufferLength: 10,
+                            maxMaxBufferLength: 20,
+                            liveSyncDurationCount: 1,
+                            liveMaxLatencyDurationCount: 2
                         });
-                    }, 1000);
+                        
+                        hls.loadSource(hlsUrl);
+                        hls.attachMedia(video);
+                        
+                        hls.on(Hls.Events.MANIFEST_PARSED, function() {
+                            console.log('HLS manifest parsed, attempting play');
+                            video.play().catch(e => {
+                                console.log('Autoplay prevented:', e);
+                                container.prepend('<div class="text-yellow-400 text-sm mb-2">Click play button to start preview (autoplay blocked)</div>');
+                            });
+                        });
+                        
+                        // Store hls instance for cleanup
+                        video.hlsInstance = hls;
+                        
+                    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                        // Native HLS support (Safari)
+                        console.log('Using native HLS support');
+                        video.load();
+                        
+                        setTimeout(() => {
+                            video.play().catch(e => {
+                                console.log('Autoplay prevented:', e);
+                                container.prepend('<div class="text-yellow-400 text-sm mb-2">Click play button to start preview (autoplay blocked)</div>');
+                            });
+                        }, 500);
+                    } else {
+                        console.warn('HLS not supported in this browser');
+                        container.prepend('<div class="text-yellow-400 text-sm mb-2">HLS may not be supported in this browser. Consider using Chrome or Safari.</div>');
+                        
+                        // Try anyway with native video element
+                        video.load();
+                        setTimeout(() => {
+                            video.play().catch(e => {
+                                console.log('Autoplay prevented:', e);
+                                container.prepend('<div class="text-yellow-400 text-sm mb-2">Click play button to start preview</div>');
+                            });
+                        }, 1000);
+                    }
                 } else {
                     console.error('HLS stream not available:', data.error);
                     container.prepend(`<div class="text-red-400 text-sm mb-2">HLS stream not available: ${data.error}</div>`);
@@ -733,6 +888,13 @@ $(document).ready(function() {
         } else {
             // Disable preview
             video.pause();
+            
+            // Clean up HLS.js instance if it exists
+            if (video.hlsInstance) {
+                video.hlsInstance.destroy();
+                video.hlsInstance = null;
+            }
+            
             video.src = '';
             container.addClass('hidden');
             disabled.removeClass('hidden');
@@ -765,15 +927,27 @@ $(document).ready(function() {
             stream_name: $('#stream-name').val(),
             auto_start: $('#auto-start').is(':checked')
         };
-        localStorage.setItem('streamConfig', JSON.stringify(config));
-        alert('Configuration saved!');
+        
+        // Save to server
+        $.ajax({
+            url: '/api/config/save',
+            type: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify(config),
+            success: function(data) {
+                alert('Configuration saved to server!');
+                checkConfigurationStatus(); // Update status display
+            },
+            error: function(xhr) {
+                const errorMessage = xhr.responseJSON ? xhr.responseJSON.message : 'Failed to save configuration';
+                alert('Error saving configuration: ' + errorMessage);
+            }
+        });
     }
 
     function loadConfiguration() {
-        const savedConfig = localStorage.getItem('streamConfig');
-        if (savedConfig) {
-            const config = JSON.parse(savedConfig);
-            
+        // Load from server
+        $.get('/api/config/load', function(config) {
             // Load values into form fields
             if (config.device) $('#video-device').val(config.device);
             if (config.resolution) $('#resolution').val(config.resolution);
@@ -786,10 +960,84 @@ $(document).ready(function() {
             
             updatePlaybackUrl();
             
-            // Wait a few seconds for video devices to load
+            // Wait a few seconds for video devices to load, then set device again
             setTimeout(function() {
                 if (config.device) $('#video-device').val(config.device);
             }, 2000);
+            
+            // Update configuration status
+            checkConfigurationStatus();
+        }).fail(function(xhr) {
+            if (xhr.status === 404) {
+                alert('No saved configuration found on server');
+            } else {
+                const errorMessage = xhr.responseJSON ? xhr.responseJSON.message : 'Failed to load configuration';
+                alert('Error loading configuration: ' + errorMessage);
+            }
+        });
+    }
+
+    function checkConfigurationStatus() {
+        $.get('/api/config/exists', function(data) {
+            const statusDiv = $('#config-status');
+            if (data.exists) {
+                const autoStartText = data.auto_start_enabled ? 
+                    '<span class="text-green-400">✓ Auto-start enabled</span>' : 
+                    '<span class="text-yellow-400">⚠ Auto-start disabled</span>';
+                
+                statusDiv.html(`
+                    Saved config: ${data.config_preview.device} @ ${data.config_preview.resolution} → ${data.config_preview.stream_name}<br>
+                    ${autoStartText}
+                `);
+            } else {
+                statusDiv.html('<span class="text-gray-500">No saved configuration</span>');
+            }
+        }).fail(function() {
+            $('#config-status').html('<span class="text-red-400">Error checking configuration</span>');
+        });
+    }
+
+    function loadVersionInfo() {
+        $.get('/api/version', function(data) {
+            const versionDiv = $('#version-info');
+            let versionText = `Version: ${data.commit} (${data.date})`;
+            
+            if (data.branch && data.branch !== 'Unknown') {
+                versionText += ` | Branch: ${data.branch}`;
+            }
+            
+            if (data.git_available) {
+                versionText += ' | <span class="text-green-400">Git available</span>';
+            } else {
+                versionText += ' | <span class="text-yellow-400">No Git</span>';
+            }
+            
+            versionText += ` | <a href="${data.repository}" target="_blank" class="text-blue-400 hover:text-blue-300">GitHub</a>`;
+            
+            versionDiv.html(versionText);
+        }).fail(function() {
+            $('#version-info').html('<span class="text-red-400">Error loading version info</span>');
+        });
+    }
+
+    function updateLatencyInfo() {
+        // Only update if preview is enabled and stream is running
+        if (previewEnabled && $('#ffmpeg-status').text().includes('Running')) {
+            const streamName = $('#stream-name').val() || 'live';
+            $.get(`/api/stream/hls/${streamName}`, function(data) {
+                if (data.available && data.latency_info) {
+                    const info = data.latency_info;
+                    let latencyText = `Estimated latency: ${info.estimated_latency_seconds || 'Unknown'}s`;
+                    if (info.low_latency_hls) {
+                        latencyText += ' (LL-HLS ✓)';
+                    }
+                    $('#latency-info').text(latencyText).removeClass('text-red-400').addClass('text-gray-500');
+                } else {
+                    $('#latency-info').text('Stream not available').removeClass('text-gray-500').addClass('text-red-400');
+                }
+            }).fail(function() {
+                $('#latency-info').text('Error checking latency').removeClass('text-gray-500').addClass('text-red-400');
+            });
         }
     }
 
@@ -1071,12 +1319,35 @@ $(document).ready(function() {
         
         $.get(`/api/stream/hls/${streamName}`, function(data) {
             if (data.available) {
-                alert(`HLS stream is available!\nURL: ${data.url}\nContent preview:\n${data.content_preview}`);
+                let message = `✅ HLS stream is available!\n\nURL: ${data.url}\n\n`;
+                
+                if (data.latency_info) {
+                    const info = data.latency_info;
+                    message += `📊 Latency Analysis:\n`;
+                    message += `• Segment Duration: ${info.segment_duration || 'Unknown'}s\n`;
+                    message += `• Segment Count: ${info.segment_count || 'Unknown'}\n`;
+                    message += `• Estimated Latency: ${info.estimated_latency_seconds || 'Unknown'}s\n`;
+                    message += `• Low Latency HLS: ${info.low_latency_hls ? '✅ Yes' : '❌ No'}\n`;
+                    message += `• Preload Hints: ${info.preload_hints ? '✅ Yes' : '❌ No'}\n\n`;
+                    
+                    if (info.estimated_latency_seconds) {
+                        if (info.estimated_latency_seconds <= 2) {
+                            message += `🟢 Excellent latency (≤2s)`;
+                        } else if (info.estimated_latency_seconds <= 5) {
+                            message += `🟡 Good latency (2-5s)`;
+                        } else {
+                            message += `🔴 High latency (>5s)`;
+                        }
+                    }
+                }
+                
+                message += `\n\nPlaylist preview:\n${data.content_preview}`;
+                alert(message);
             } else {
-                alert(`HLS stream not available:\n${data.error}`);
+                alert(`❌ HLS stream not available:\n${data.error}`);
             }
         }).fail(function() {
-            alert('Failed to check HLS stream availability');
+            alert('❌ Failed to check HLS stream availability');
         }).always(function() {
             button.text('Check HLS').prop('disabled', false);
         });

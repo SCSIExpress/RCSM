@@ -23,7 +23,7 @@ from logging.handlers import RotatingFileHandler
 from flask import Flask, render_template, jsonify, request
 
 # --- Configuration ---
-APP_PORT = 5000
+APP_PORT = 80
 MEDIAMTX_URL = "https://github.com/bluenviron/mediamtx/releases/download/v1.13.1/mediamtx_v1.13.1_linux_arm64.tar.gz"
 MEDIAMTX_DIR = "/opt/mediamtx"
 MEDIAMTX_BIN = os.path.join(MEDIAMTX_DIR, "mediamtx")
@@ -400,19 +400,49 @@ def stream_stats_api():
 
 @app.route("/api/stream/hls/<stream_name>")
 def check_hls_stream(stream_name):
-    """Check if HLS stream is available."""
+    """Check if HLS stream is available and analyze latency settings."""
     try:
         import urllib.request
+        import re
         hls_url = f"http://localhost:8080/{stream_name}/index.m3u8"
         
         # Try to fetch the HLS playlist
         try:
             with urllib.request.urlopen(hls_url, timeout=5) as response:
                 content = response.read().decode('utf-8')
+                
+                # Analyze HLS playlist for latency info
+                segment_duration = None
+                segment_count = 0
+                
+                # Extract target duration
+                duration_match = re.search(r'#EXT-X-TARGETDURATION:(\d+)', content)
+                if duration_match:
+                    segment_duration = int(duration_match.group(1))
+                
+                # Count segments
+                segment_count = len(re.findall(r'#EXTINF:', content))
+                
+                # Calculate estimated latency
+                estimated_latency = None
+                if segment_duration and segment_count:
+                    estimated_latency = segment_duration * segment_count
+                
+                # Check for low latency features
+                has_ll_hls = '#EXT-X-PART:' in content
+                has_preload_hint = '#EXT-X-PRELOAD-HINT:' in content
+                
                 return jsonify({
                     "available": True,
                     "url": hls_url,
-                    "content_preview": content[:200] + "..." if len(content) > 200 else content
+                    "content_preview": content[:200] + "..." if len(content) > 200 else content,
+                    "latency_info": {
+                        "segment_duration": segment_duration,
+                        "segment_count": segment_count,
+                        "estimated_latency_seconds": estimated_latency,
+                        "low_latency_hls": has_ll_hls,
+                        "preload_hints": has_preload_hint
+                    }
                 })
         except urllib.error.URLError as e:
             return jsonify({
@@ -471,12 +501,112 @@ def load_config():
         if os.path.exists(config_file):
             with open(config_file, "r") as f:
                 config = json.load(f)
+            logging.info(f"Configuration loaded: {config}")
             return jsonify(config)
         else:
             return jsonify({"message": "No saved configuration found"}), 404
     except Exception as e:
         logging.error(f"Error loading configuration: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route("/api/config/exists")
+def config_exists():
+    """Checks if a saved configuration exists."""
+    try:
+        config_file = os.path.join(os.path.dirname(__file__), "stream_config.json")
+        exists = os.path.exists(config_file)
+        
+        if exists:
+            # Also check if auto-start is enabled
+            with open(config_file, "r") as f:
+                config = json.load(f)
+            auto_start_enabled = config.get("auto_start", False)
+            return jsonify({
+                "exists": True, 
+                "auto_start_enabled": auto_start_enabled,
+                "config_preview": {
+                    "device": config.get("device", "N/A"),
+                    "resolution": config.get("resolution", "N/A"),
+                    "stream_name": config.get("stream_name", "N/A")
+                }
+            })
+        else:
+            return jsonify({"exists": False, "auto_start_enabled": False})
+    except Exception as e:
+        logging.error(f"Error checking configuration: {e}")
+        return jsonify({"exists": False, "auto_start_enabled": False, "error": str(e)})
+
+@app.route("/api/config/test-autostart", methods=["POST"])
+def test_autostart():
+    """Manually trigger auto-start for testing purposes."""
+    try:
+        logging.info("Manual auto-start test triggered")
+        auto_start_thread = threading.Thread(target=auto_start_stream)
+        auto_start_thread.daemon = True
+        auto_start_thread.start()
+        return jsonify({"status": "ok", "message": "Auto-start test initiated, check logs"})
+    except Exception as e:
+        logging.error(f"Error triggering auto-start test: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route("/api/update/test-connection", methods=["GET"])
+def test_github_connection():
+    """Test connectivity to GitHub for update functionality."""
+    try:
+        import urllib.request
+        
+        # Test basic internet connectivity
+        try:
+            urllib.request.urlopen("https://8.8.8.8", timeout=5)
+            internet_ok = True
+        except:
+            internet_ok = False
+        
+        # Test GitHub connectivity
+        github_ok = False
+        github_error = None
+        try:
+            req = urllib.request.Request("https://api.github.com")
+            req.add_header('User-Agent', 'RCSM-Updater/1.0')
+            with urllib.request.urlopen(req, timeout=10) as response:
+                github_ok = response.status == 200
+        except Exception as e:
+            github_error = str(e)
+        
+        # Test specific repository API
+        repo_ok = False
+        repo_error = None
+        try:
+            req = urllib.request.Request("https://api.github.com/repos/SCSIExpress/RCSM")
+            req.add_header('User-Agent', 'RCSM-Updater/1.0')
+            with urllib.request.urlopen(req, timeout=10) as response:
+                repo_ok = response.status == 200
+        except Exception as e:
+            repo_error = str(e)
+        
+        # Check write permissions
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        write_ok = os.access(current_dir, os.W_OK)
+        
+        return jsonify({
+            "internet_connection": internet_ok,
+            "github_api": github_ok,
+            "github_error": github_error,
+            "repository_access": repo_ok,
+            "repository_error": repo_error,
+            "write_permission": write_ok,
+            "current_directory": current_dir,
+            "git_available": bool(run_command("git --version"))
+        })
+        
+    except Exception as e:
+        return jsonify({
+            "error": str(e),
+            "internet_connection": False,
+            "github_api": False,
+            "repository_access": False,
+            "write_permission": False
+        }), 500
 
 @app.route("/api/tailscale/status")
 def tailscale_status():
@@ -517,23 +647,60 @@ def get_version():
         # Try to get git commit info
         current_commit = None
         commit_date = None
+        commit_message = None
+        branch_name = None
+        git_available = False
+        
         try:
-            current_commit = run_command("git rev-parse HEAD")
-            if current_commit:
-                current_commit = current_commit[:7]  # Short hash
+            # Check if git is available and we're in a repo
+            git_check = run_command("git rev-parse --is-inside-work-tree")
+            if git_check and "true" in git_check.lower():
+                git_available = True
+                
+                # Get commit info
+                current_commit = run_command("git rev-parse HEAD")
+                if current_commit and len(current_commit) >= 7:
+                    current_commit = current_commit[:7]  # Short hash
+                
+                # Get commit date
                 commit_date = run_command("git log -1 --format=%cd --date=short")
+                
+                # Get commit message
+                commit_message = run_command("git log -1 --format=%s")
+                
+                # Get branch name
+                branch_name = run_command("git rev-parse --abbrev-ref HEAD")
+                
+        except Exception as e:
+            logging.debug(f"Git info not available: {e}")
+        
+        # Get file modification time as fallback
+        file_mtime = None
+        try:
+            script_path = os.path.abspath(__file__)
+            mtime = os.path.getmtime(script_path)
+            file_mtime = time.strftime('%Y-%m-%d', time.localtime(mtime))
         except:
             pass
         
         return jsonify({
             "commit": current_commit or "Unknown",
-            "date": commit_date or "Unknown",
-            "repository": "https://github.com/SCSIExpress/RCSM"
+            "date": commit_date or file_mtime or "Unknown",
+            "message": commit_message or "Unknown",
+            "branch": branch_name or "Unknown",
+            "git_available": git_available,
+            "repository": "https://github.com/SCSIExpress/RCSM",
+            "file_modified": file_mtime
         })
+        
     except Exception as e:
         return jsonify({
             "commit": "Unknown",
-            "date": "Unknown", 
+            "date": "Unknown",
+            "message": "Unknown",
+            "branch": "Unknown", 
+            "git_available": False,
+            "repository": "https://github.com/SCSIExpress/RCSM",
             "error": str(e)
         })
 
@@ -553,26 +720,67 @@ def check_and_update():
         api_url = "https://api.github.com/repos/SCSIExpress/RCSM/commits/main"
         download_url = "https://github.com/SCSIExpress/RCSM/archive/refs/heads/main.zip"
         
-        # Get current directory
+        # Get current directory and check write permissions
         current_dir = os.path.dirname(os.path.abspath(__file__))
+        if not os.access(current_dir, os.W_OK):
+            return jsonify({
+                "status": "error",
+                "message": f"No write permission to directory: {current_dir}"
+            }), 500
+        
+        # Test internet connectivity
+        try:
+            urllib.request.urlopen("https://api.github.com", timeout=5)
+        except Exception as e:
+            return jsonify({
+                "status": "error",
+                "message": f"No internet connection or GitHub is unreachable: {str(e)}"
+            }), 500
         
         # Check if we're in a git repository to get current commit
         current_commit = None
+        git_available = False
         try:
             current_commit = run_command("git rev-parse HEAD")
-            if current_commit:
+            if current_commit and len(current_commit) >= 7:
                 current_commit = current_commit[:7]  # Short hash
+                git_available = True
+                logging.info(f"Current git commit: {current_commit}")
         except:
-            logging.info("Not in a git repository, proceeding with update")
+            logging.info("Not in a git repository or git not available, proceeding with update")
         
         # Get latest commit from GitHub API
         try:
-            with urllib.request.urlopen(api_url, timeout=10) as response:
+            # Add User-Agent header to avoid GitHub API issues
+            req = urllib.request.Request(api_url)
+            req.add_header('User-Agent', 'RCSM-Updater/1.0')
+            
+            with urllib.request.urlopen(req, timeout=15) as response:
+                if response.status != 200:
+                    return jsonify({
+                        "status": "error",
+                        "message": f"GitHub API returned status {response.status}"
+                    }), 500
+                
                 import json
                 data = json.loads(response.read().decode())
                 latest_commit = data['sha'][:7]  # Short hash
-                commit_message = data['commit']['message']
+                commit_message = data['commit']['message'].split('\n')[0]  # First line only
                 commit_date = data['commit']['author']['date']
+                
+                logging.info(f"Latest GitHub commit: {latest_commit}")
+                
+        except urllib.error.HTTPError as e:
+            if e.code == 403:
+                return jsonify({
+                    "status": "error",
+                    "message": "GitHub API rate limit exceeded. Please try again later."
+                }), 500
+            else:
+                return jsonify({
+                    "status": "error", 
+                    "message": f"GitHub API error {e.code}: {str(e)}"
+                }), 500
         except Exception as e:
             return jsonify({
                 "status": "error", 
@@ -580,28 +788,78 @@ def check_and_update():
             }), 500
         
         # Compare commits if we have current commit info
-        if current_commit and current_commit == latest_commit:
+        if git_available and current_commit and current_commit == latest_commit:
             return jsonify({
                 "status": "up_to_date",
                 "message": "Application is already up to date",
                 "current_commit": current_commit,
-                "latest_commit": latest_commit
+                "latest_commit": latest_commit,
+                "commit_message": commit_message,
+                "commit_date": commit_date
             })
+        
+        # If not in git repo, warn user but proceed
+        if not git_available:
+            logging.warning("Cannot verify current version - not in git repository")
         
         # Download and extract update
         with tempfile.TemporaryDirectory() as temp_dir:
             zip_path = os.path.join(temp_dir, "update.zip")
             
-            # Download the latest version
+            # Download the latest version with progress logging
             logging.info(f"Downloading update from {download_url}")
-            with urllib.request.urlopen(download_url, timeout=30) as response:
-                with open(zip_path, 'wb') as f:
-                    shutil.copyfileobj(response, f)
+            try:
+                req = urllib.request.Request(download_url)
+                req.add_header('User-Agent', 'RCSM-Updater/1.0')
+                
+                with urllib.request.urlopen(req, timeout=60) as response:
+                    if response.status != 200:
+                        return jsonify({
+                            "status": "error",
+                            "message": f"Failed to download update: HTTP {response.status}"
+                        }), 500
+                    
+                    # Get file size for progress tracking
+                    file_size = response.headers.get('Content-Length')
+                    if file_size:
+                        file_size = int(file_size)
+                        logging.info(f"Downloading {file_size} bytes")
+                    
+                    with open(zip_path, 'wb') as f:
+                        shutil.copyfileobj(response, f)
+                        
+            except Exception as e:
+                return jsonify({
+                    "status": "error",
+                    "message": f"Failed to download update: {str(e)}"
+                }), 500
             
-            # Extract the zip file
+            # Verify and extract the zip file
+            if not os.path.exists(zip_path) or os.path.getsize(zip_path) == 0:
+                return jsonify({
+                    "status": "error",
+                    "message": "Downloaded file is empty or corrupted"
+                }), 500
+            
             extract_dir = os.path.join(temp_dir, "extracted")
-            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                zip_ref.extractall(extract_dir)
+            try:
+                with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                    # Test the zip file integrity
+                    bad_file = zip_ref.testzip()
+                    if bad_file:
+                        return jsonify({
+                            "status": "error",
+                            "message": f"Corrupted file in archive: {bad_file}"
+                        }), 500
+                    
+                    zip_ref.extractall(extract_dir)
+                    logging.info(f"Extracted archive to {extract_dir}")
+                    
+            except zipfile.BadZipFile:
+                return jsonify({
+                    "status": "error",
+                    "message": "Downloaded file is not a valid zip archive"
+                }), 500
             
             # Find the extracted folder (should be RCSM-main)
             extracted_folders = [d for d in os.listdir(extract_dir) if os.path.isdir(os.path.join(extract_dir, d))]
@@ -612,52 +870,112 @@ def check_and_update():
                 }), 500
             
             source_dir = os.path.join(extract_dir, extracted_folders[0])
+            logging.info(f"Source directory: {source_dir}")
             
             # Backup current files
             backup_dir = os.path.join(current_dir, f"backup_{int(time.time())}")
-            os.makedirs(backup_dir, exist_ok=True)
+            try:
+                os.makedirs(backup_dir, exist_ok=True)
+                logging.info(f"Created backup directory: {backup_dir}")
+            except Exception as e:
+                return jsonify({
+                    "status": "error",
+                    "message": f"Failed to create backup directory: {str(e)}"
+                }), 500
             
-            # Files to update
+            # Files to update - check if they exist in source first
             files_to_update = [
                 "radxa_stream_manager.py",
-                "templates/index.html",
+                "templates/index.html", 
                 "setup.sh",
-                "README.md"
+                "README.md",
+                "CHANGELOG.md",
+                "API.md",
+                "INSTALLATION.md",
+                "TROUBLESHOOTING.md",
+                "CONTRIBUTING.md"
             ]
             
-            updated_files = []
+            # Verify source files exist before starting update
+            available_files = []
             for file_path in files_to_update:
                 source_file = os.path.join(source_dir, file_path)
-                dest_file = os.path.join(current_dir, file_path)
-                backup_file = os.path.join(backup_dir, file_path)
-                
                 if os.path.exists(source_file):
+                    available_files.append(file_path)
+                else:
+                    logging.warning(f"Source file not found: {file_path}")
+            
+            if not available_files:
+                return jsonify({
+                    "status": "error",
+                    "message": "No updatable files found in the downloaded archive"
+                }), 500
+            
+            # Perform the update
+            updated_files = []
+            failed_files = []
+            
+            for file_path in available_files:
+                try:
+                    source_file = os.path.join(source_dir, file_path)
+                    dest_file = os.path.join(current_dir, file_path)
+                    backup_file = os.path.join(backup_dir, file_path)
+                    
                     # Create backup directory structure
-                    os.makedirs(os.path.dirname(backup_file), exist_ok=True)
+                    backup_parent = os.path.dirname(backup_file)
+                    if backup_parent:
+                        os.makedirs(backup_parent, exist_ok=True)
                     
                     # Backup current file if it exists
                     if os.path.exists(dest_file):
                         shutil.copy2(dest_file, backup_file)
+                        logging.info(f"Backed up: {file_path}")
+                    
+                    # Create destination directory if needed
+                    dest_parent = os.path.dirname(dest_file)
+                    if dest_parent:
+                        os.makedirs(dest_parent, exist_ok=True)
                     
                     # Copy new file
-                    os.makedirs(os.path.dirname(dest_file), exist_ok=True)
                     shutil.copy2(source_file, dest_file)
                     updated_files.append(file_path)
                     logging.info(f"Updated file: {file_path}")
+                    
+                except Exception as e:
+                    failed_files.append(f"{file_path}: {str(e)}")
+                    logging.error(f"Failed to update {file_path}: {e}")
+            
+            if failed_files:
+                logging.warning(f"Some files failed to update: {failed_files}")
+            
+            if not updated_files:
+                return jsonify({
+                    "status": "error",
+                    "message": f"No files were updated. Errors: {'; '.join(failed_files)}"
+                }), 500
         
-        # Restart the service if it's running as a systemd service
+        # Try to restart the service - check multiple possible service names
         restart_attempted = False
-        try:
-            # Check if running as systemd service
-            service_status = run_command("systemctl is-active radxa-stream-manager")
-            if service_status and "active" in service_status:
-                logging.info("Restarting radxa-stream-manager service")
-                run_command("sudo systemctl restart radxa-stream-manager")
-                restart_attempted = True
-        except:
-            logging.info("Service restart not available or not running as service")
+        service_names = ["radxa-stream-manager", "rcsm", "radxa_stream_manager"]
         
-        return jsonify({
+        for service_name in service_names:
+            try:
+                service_status = run_command(f"systemctl is-active {service_name}")
+                if service_status and "active" in service_status:
+                    logging.info(f"Found active service: {service_name}")
+                    restart_result = run_command(f"sudo systemctl restart {service_name}")
+                    logging.info(f"Service restart result: {restart_result}")
+                    restart_attempted = True
+                    break
+            except Exception as e:
+                logging.debug(f"Service {service_name} not found or not active: {e}")
+                continue
+        
+        if not restart_attempted:
+            logging.info("No active systemd service found for auto-restart")
+        
+        # Prepare response
+        response_data = {
             "status": "success",
             "message": f"Successfully updated {len(updated_files)} files",
             "updated_files": updated_files,
@@ -667,7 +985,18 @@ def check_and_update():
             "commit_date": commit_date,
             "restart_attempted": restart_attempted,
             "restart_note": "Please manually restart the application if not running as a service"
-        })
+        }
+        
+        # Add warnings if any files failed
+        if failed_files:
+            response_data["warnings"] = failed_files
+            response_data["message"] += f" (with {len(failed_files)} warnings)"
+        
+        # Add current commit info if available
+        if git_available and current_commit:
+            response_data["previous_commit"] = current_commit
+        
+        return jsonify(response_data)
         
     except Exception as e:
         logging.error(f"Update failed: {e}")
@@ -743,8 +1072,9 @@ def auto_start_stream():
                     if os.path.exists(device_path):
                         logging.info(f"Auto-starting stream with device: {device_path}")
                         
-                        # Wait a bit for system to be fully ready
-                        time.sleep(5)
+                        # Wait for system to be fully ready (longer delay for auto-start)
+                        logging.info("Waiting 10 seconds for system to be ready...")
+                        time.sleep(10)
                         
                         # Start the stream using the same logic as the API endpoint
                         try:
@@ -759,12 +1089,20 @@ def auto_start_stream():
                                 "stream_name": config["stream_name"]
                             }
                             
-                            # Call the stream start function directly
-                            start_stream_internal(stream_data)
-                            logging.info("Auto-start completed successfully")
+                            logging.info(f"Auto-start stream data: {stream_data}")
                             
+                            # Call the stream start function directly
+                            ffmpeg_cmd = start_stream_internal(stream_data)
+                            logging.info(f"Auto-start completed successfully with command: {ffmpeg_cmd}")
+                            
+                        except ValueError as e:
+                            logging.error(f"Auto-start failed - invalid configuration: {e}")
+                        except RuntimeError as e:
+                            logging.error(f"Auto-start failed - runtime error: {e}")
                         except Exception as e:
-                            logging.error(f"Auto-start failed: {e}")
+                            logging.error(f"Auto-start failed - unexpected error: {e}")
+                            import traceback
+                            logging.error(f"Auto-start traceback: {traceback.format_exc()}")
                     else:
                         logging.warning(f"Auto-start skipped: saved device {device_path} not found")
                 else:
@@ -796,7 +1134,7 @@ def start_stream_internal(data):
     if not all([device, resolution, framerate, bitrate, encoder, srt_port, stream_name]):
         raise ValueError("Missing one or more required parameters for starting the stream.")
 
-    # 1. Generate MediaMTX config
+    # 1. Generate MediaMTX config optimized for low latency HLS
     mediamtx_config_content = {
         "srt": True,
         "srtAddress": f":{srt_port}",
@@ -804,14 +1142,20 @@ def start_stream_internal(data):
         "hlsAddress": ":8080",
         "hlsEncryption": False,
         "hlsAllowOrigin": "*",
-        "hlsVariant": "mpegts",
-        "hlsSegmentCount": 3,
-        "hlsSegmentDuration": "1s",
-        "hlsPartDuration": "200ms",
+        "hlsVariant": "lowLatency",  # Use low latency variant
+        "hlsSegmentCount": 2,        # Minimum segments for playback
+        "hlsSegmentDuration": "500ms",  # Shorter segments for lower latency
+        "hlsPartDuration": "100ms",     # Shorter parts for LL-HLS
+        "hlsSegmentMaxSize": "2M",      # Limit segment size
+        "hlsDirectory": "",             # Use memory instead of disk
         "paths": {
             stream_name: {
                 "source": "publisher",
-                "sourceOnDemand": False
+                "sourceOnDemand": False,
+                # Path-specific HLS settings for even lower latency
+                "hlsSegmentDuration": "400ms",
+                "hlsPartDuration": "80ms",
+                "hlsSegmentCount": 2
             }
         }
     }
@@ -867,10 +1211,15 @@ def start_stream_internal(data):
     # Give MediaMTX an extra moment to be fully ready
     time.sleep(1)
     
-    # Use camera's native framerate instead of forcing it
+    # Optimized FFmpeg command for low latency streaming
     ffmpeg_cmd = (
         f"ffmpeg -f v4l2 -input_format yuyv422 -video_size {width}x{height} "
-        f"-i {device} -c:v {encoder} -b:v {bitrate}k -g 20 "
+        f"-framerate {framerate} -i {device} "
+        f"-c:v {encoder} -b:v {bitrate}k "
+        f"-g {int(framerate)} -keyint_min {int(framerate)} "  # GOP size = framerate for frequent keyframes
+        f"-sc_threshold 0 -force_key_frames 'expr:gte(t,n_forced*1)' "  # Force keyframes every second
+        f"-preset ultrafast -tune zerolatency "  # Low latency presets
+        f"-bufsize {int(bitrate)*2}k -maxrate {int(bitrate)*1.2}k "  # Buffer control
         f"-f mpegts '{srt_url}'"
     )
     logging.info(f"Starting FFmpeg with command: {ffmpeg_cmd}")
