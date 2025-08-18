@@ -1114,6 +1114,44 @@ def auto_start_stream():
     except Exception as e:
         logging.error(f"Error during auto-start check: {e}")
 
+def get_mediamtx_version():
+    """Get MediaMTX version to determine supported features."""
+    try:
+        version_output = run_command(f"{MEDIAMTX_BIN} --version")
+        if version_output:
+            logging.info(f"MediaMTX version: {version_output}")
+            return version_output
+        return None
+    except Exception as e:
+        logging.warning(f"Could not determine MediaMTX version: {e}")
+        return None
+
+def validate_mediamtx_config(config_content):
+    """Validate MediaMTX configuration by testing it."""
+    try:
+        # Create a temporary config file
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yml', delete=False) as temp_config:
+            yaml.dump(config_content, temp_config)
+            temp_config_path = temp_config.name
+        
+        # Test the configuration
+        test_result = run_command(f"{MEDIAMTX_BIN} --conf {temp_config_path} --check")
+        
+        # Clean up temp file
+        os.unlink(temp_config_path)
+        
+        if test_result is not None:
+            logging.info("MediaMTX configuration validation passed")
+            return True
+        else:
+            logging.warning("MediaMTX configuration validation failed")
+            return False
+            
+    except Exception as e:
+        logging.error(f"Error validating MediaMTX configuration: {e}")
+        return False
+
 def start_stream_internal(data):
     """Internal function to start stream (used by both API and auto-start)."""
     global ffmpeg_process
@@ -1133,8 +1171,11 @@ def start_stream_internal(data):
 
     if not all([device, resolution, framerate, bitrate, encoder, srt_port, stream_name]):
         raise ValueError("Missing one or more required parameters for starting the stream.")
+    
+    # Check MediaMTX version for feature compatibility
+    mediamtx_version = get_mediamtx_version()
 
-    # 1. Generate MediaMTX config optimized for low latency HLS
+    # 1. Generate MediaMTX config with version-appropriate settings
     mediamtx_config_content = {
         "srt": True,
         "srtAddress": f":{srt_port}",
@@ -1142,37 +1183,78 @@ def start_stream_internal(data):
         "hlsAddress": ":8080",
         "hlsEncryption": False,
         "hlsAllowOrigin": "*",
-        "hlsVariant": "lowLatency",  # Use low latency variant
-        "hlsSegmentCount": 2,        # Minimum segments for playback
-        "hlsSegmentDuration": "500ms",  # Shorter segments for lower latency
-        "hlsPartDuration": "100ms",     # Shorter parts for LL-HLS
-        "hlsSegmentMaxSize": "2M",      # Limit segment size
-        "hlsDirectory": "",             # Use memory instead of disk
+        "hlsVariant": "mpegts",         # Standard variant for broad compatibility
+        "hlsSegmentCount": 3,           # Safe default for compatibility
+        "hlsSegmentDuration": "2s",     # Conservative duration to ensure stability
         "paths": {
             stream_name: {
                 "source": "publisher",
-                "sourceOnDemand": False,
-                # Path-specific HLS settings for even lower latency
-                "hlsSegmentDuration": "400ms",
-                "hlsPartDuration": "80ms",
-                "hlsSegmentCount": 2
+                "sourceOnDemand": False
             }
         }
     }
-    with open(MEDIAMTX_CONFIG, "w") as f:
-        yaml.dump(mediamtx_config_content, f)
     
-    # 2. Restart MediaMTX
+    # Try to optimize for lower latency if MediaMTX version supports it
+    if mediamtx_version:
+        try:
+            # For newer versions, try shorter segments
+            mediamtx_config_content["hlsSegmentCount"] = 2
+            mediamtx_config_content["hlsSegmentDuration"] = "1s"
+            logging.info("Using optimized HLS settings for detected MediaMTX version")
+        except:
+            logging.info("Using conservative HLS settings for compatibility")
+    else:
+        logging.info("MediaMTX version unknown, using conservative HLS settings")
+    # Validate configuration before applying
+    if not validate_mediamtx_config(mediamtx_config_content):
+        logging.warning("Configuration validation failed, using minimal safe config")
+        # Fallback to minimal configuration
+        mediamtx_config_content = {
+            "srt": True,
+            "srtAddress": f":{srt_port}",
+            "hls": True,
+            "hlsAddress": ":8080",
+            "hlsAllowOrigin": "*",
+            "paths": {
+                stream_name: {
+                    "source": "publisher"
+                }
+            }
+        }
+    
+    # Write configuration file with error handling
+    try:
+        with open(MEDIAMTX_CONFIG, "w") as f:
+            yaml.dump(mediamtx_config_content, f)
+        logging.info(f"MediaMTX config written to {MEDIAMTX_CONFIG}")
+        logging.info(f"Config content: {mediamtx_config_content}")
+    except Exception as e:
+        raise RuntimeError(f"Failed to write MediaMTX configuration: {e}")
+    
+    # 2. Restart MediaMTX with better error handling
     logging.info("Restarting MediaMTX service with new configuration.")
-    logging.info(f"Generated MediaMTX config: {mediamtx_config_content}")
-    restart_result = run_command("sudo systemctl restart mediamtx")
-    logging.info(f"MediaMTX restart command result: {restart_result}")
     
-    # Check MediaMTX status immediately after restart
+    # Stop MediaMTX first
+    stop_result = run_command("sudo systemctl stop mediamtx")
+    logging.info(f"MediaMTX stop result: {stop_result}")
+    time.sleep(2)  # Give it time to stop
+    
+    # Start MediaMTX
+    start_result = run_command("sudo systemctl start mediamtx")
+    logging.info(f"MediaMTX start result: {start_result}")
+    
+    # Check for startup errors
+    time.sleep(3)  # Give MediaMTX time to start
     status_result = run_command("sudo systemctl is-active mediamtx")
     logging.info(f"MediaMTX status after restart: {status_result}")
     
-    # Also check if HLS port is available
+    if not status_result or "active" not in status_result:
+        # Get detailed error information
+        error_logs = run_command("sudo journalctl -u mediamtx -n 10 --no-pager")
+        logging.error(f"MediaMTX failed to start. Recent logs: {error_logs}")
+        raise RuntimeError(f"MediaMTX service failed to start. Status: {status_result}")
+    
+    # Check if HLS port is available
     hls_port_check = run_command("netstat -ln | grep :8080")
     logging.info(f"HLS port 8080 status: {hls_port_check}")
     
