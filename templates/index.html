@@ -411,6 +411,7 @@
             <button id="run-system-test" class="btn btn-blue">Run System Test</button>
             <button id="refresh-log" class="btn btn-blue">Refresh App Log</button>
             <button id="refresh-mediamtx-log" class="btn btn-blue">MediaMTX Logs</button>
+            <button id="test-mediamtx-config" class="btn btn-blue">Test MediaMTX Config</button>
             <button id="test-autostart" class="btn btn-blue">Test Auto-Start</button>
             <button id="test-update-connection" class="btn btn-blue">Test Update Connection</button>
             <button id="check-updates" class="btn btn-green">Check for Updates</button>
@@ -652,6 +653,48 @@ $(document).ready(function() {
             alert('Auto-start test failed: ' + errorMessage);
         }).always(function() {
             button.text('Test Auto-Start').prop('disabled', false);
+        });
+    });
+
+    $('#test-mediamtx-config').click(function() {
+        const button = $(this);
+        button.text('Testing...').prop('disabled', true);
+        
+        const testData = {
+            srt_port: $('#srt-port').val() || 8888,
+            stream_name: $('#stream-name').val() || 'live'
+        };
+        
+        $.ajax({
+            url: '/api/mediamtx/test-config',
+            type: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify(testData),
+            success: function(data) {
+                let message = '🔧 MediaMTX Configuration Test:\n\n';
+                message += `Configuration Valid: ${data.config_valid ? '✅ Yes' : '❌ No'}\n`;
+                message += `MediaMTX Version: ${data.mediamtx_version || 'Unknown'}\n`;
+                message += `Binary Path: ${data.mediamtx_binary}\n`;
+                message += `Config File: ${data.config_file}\n\n`;
+                
+                if (data.config_valid) {
+                    message += '✅ Configuration should work with your MediaMTX version.';
+                } else {
+                    message += '❌ Configuration may have compatibility issues.';
+                    if (data.error) {
+                        message += `\nError: ${data.error}`;
+                    }
+                }
+                
+                alert(message);
+            },
+            error: function(xhr) {
+                const errorMessage = xhr.responseJSON ? xhr.responseJSON.error : 'Config test failed';
+                alert(`❌ MediaMTX config test failed: ${errorMessage}`);
+            },
+            complete: function() {
+                button.text('Test MediaMTX Config').prop('disabled', false);
+            }
         });
     });
 

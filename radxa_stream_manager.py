@@ -608,6 +608,49 @@ def test_github_connection():
             "write_permission": False
         }), 500
 
+@app.route("/api/mediamtx/test-config", methods=["POST"])
+def test_mediamtx_config():
+    """Test MediaMTX configuration without applying it."""
+    try:
+        data = request.json or {}
+        srt_port = data.get("srt_port", 8888)
+        stream_name = data.get("stream_name", "live")
+        
+        # Create test configuration
+        test_config = {
+            "srt": True,
+            "srtAddress": f":{srt_port}",
+            "hls": True,
+            "hlsAddress": ":8080",
+            "hlsAllowOrigin": "*",
+            "paths": {
+                stream_name: {
+                    "source": "publisher"
+                }
+            }
+        }
+        
+        # Test the configuration
+        is_valid = validate_mediamtx_config(test_config)
+        
+        # Get MediaMTX version info
+        version = get_mediamtx_version()
+        
+        return jsonify({
+            "config_valid": is_valid,
+            "mediamtx_version": version,
+            "test_config": test_config,
+            "mediamtx_binary": MEDIAMTX_BIN,
+            "config_file": MEDIAMTX_CONFIG
+        })
+        
+    except Exception as e:
+        logging.error(f"Error testing MediaMTX config: {e}")
+        return jsonify({
+            "config_valid": False,
+            "error": str(e)
+        }), 500
+
 @app.route("/api/tailscale/status")
 def tailscale_status():
     """Returns Tailscale connection status."""
