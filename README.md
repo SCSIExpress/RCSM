@@ -5,6 +5,7 @@ A web-based interface for managing camera streams on Radxa single-board computer
 ## Features
 
 - 🎥 **Stream Management**: Start and stop camera streams with a single click
+- 🔍 **Smart Camera Detection**: Automatically detect available resolutions, framerates, and pixel formats using v4l2-ctl
 - 🌐 **Web Interface**: Clean, responsive web UI accessible from any device
 - 📊 **Real-time Status**: Live updates on stream status and system information
 - 🔧 **Easy Setup**: Automated installation script for quick deployment
@@ -45,6 +46,7 @@ The setup script handles everything automatically - no need to clone the reposit
 The web interface provides:
 
 - **Stream Control**: Start/Stop buttons for camera streaming
+- **Camera Detection**: Automatic detection of supported resolutions, framerates, and pixel formats
 - **Status Display**: Real-time stream status indicator
 - **System Info**: Current system status and configuration
 - **Responsive Design**: Works on desktop, tablet, and mobile devices
@@ -58,20 +60,14 @@ The web interface provides:
 
 ## Configuration
 
-The application uses default settings that work with most RockChip setups. For custom configurations, modify the stream parameters in `radxa_stream_manager.py`:
+The application automatically detects camera capabilities and generates optimized FFmpeg commands. The web interface allows you to:
 
-```python
-# Example stream command customization
-stream_command = [
-    'gst-launch-1.0',
-    'v4l2src', 'device=/dev/video0',
-    '!', 'video/x-raw,width=1920,height=1080,framerate=30/1',
-    '!', 'videoconvert',
-    '!', 'x264enc', 'tune=zerolatency',
-    '!', 'rtph264pay',
-    '!', 'udpsink', 'host=0.0.0.0', 'port=80'
-]
-```
+1. **Select Video Device**: Choose from detected cameras
+2. **Detect Options**: Automatically discover supported resolutions, framerates, and pixel formats
+3. **Configure Stream**: Select optimal settings based on detected capabilities
+4. **Save Configuration**: Store settings for automatic startup
+
+The system uses FFmpeg with hardware acceleration for efficient streaming on Radxa devices.
 
 ## Troubleshooting
 

@@ -116,6 +116,72 @@ def get_device_capabilities(device_path):
         logging.error(f"Failed to get device capabilities for {device_path}: {e}")
         return f"Error: {str(e)}"
 
+def parse_device_options(device_path):
+    """Parse v4l2-ctl output to extract available resolutions, framerates, and pixel formats."""
+    try:
+        formats_output = run_command(f"v4l2-ctl --device={device_path} --list-formats-ext")
+        if not formats_output:
+            return {"error": "No format information available"}
+        
+        options = {
+            "pixel_formats": [],
+            "resolutions": [],
+            "framerates": []
+        }
+        
+        current_format = None
+        
+        for line in formats_output.split('\n'):
+            line = line.strip()
+            
+            # Parse pixel format lines like "[0]: 'YUYV' (YUYV 4:2:2)"
+            if line.startswith('[') and ']:' in line and "'" in line:
+                format_match = re.search(r"'([^']+)'", line)
+                if format_match:
+                    current_format = format_match.group(1)
+                    if current_format not in options["pixel_formats"]:
+                        options["pixel_formats"].append(current_format)
+            
+            # Parse resolution and framerate lines like "Size: Discrete 1920x1080"
+            elif "Size: Discrete" in line:
+                size_match = re.search(r'(\d+)x(\d+)', line)
+                if size_match:
+                    resolution = f"{size_match.group(1)}x{size_match.group(2)}"
+                    if resolution not in options["resolutions"]:
+                        options["resolutions"].append(resolution)
+            
+            # Parse framerate lines like "Interval: Discrete 0.033s (30.000 fps)"
+            elif "Interval: Discrete" in line and "fps" in line:
+                fps_match = re.search(r'\(([0-9.]+)\s+fps\)', line)
+                if fps_match:
+                    fps = float(fps_match.group(1))
+                    fps_int = int(fps) if fps.is_integer() else fps
+                    if fps_int not in options["framerates"]:
+                        options["framerates"].append(fps_int)
+        
+        # Sort options for better UX
+        options["resolutions"].sort(key=lambda x: int(x.split('x')[0]), reverse=True)  # Sort by width, largest first
+        options["framerates"].sort(reverse=True)  # Sort framerates, highest first
+        
+        # Common pixel format ordering (preferred formats first)
+        format_priority = ['YUYV', 'MJPG', 'H264', 'RGB24', 'BGR24', 'YUV420', 'NV12']
+        sorted_formats = []
+        for fmt in format_priority:
+            if fmt in options["pixel_formats"]:
+                sorted_formats.append(fmt)
+        # Add any remaining formats
+        for fmt in options["pixel_formats"]:
+            if fmt not in sorted_formats:
+                sorted_formats.append(fmt)
+        options["pixel_formats"] = sorted_formats
+        
+        logging.info(f"Parsed options for {device_path}: {options}")
+        return options
+        
+    except Exception as e:
+        logging.error(f"Failed to parse device options for {device_path}: {e}")
+        return {"error": str(e)}
+
 def get_camera_controls(device_path):
     """Gets available camera controls for a video device."""
     try:
@@ -438,6 +504,14 @@ def device_capabilities(device_path):
     device_path = "/" + device_path
     capabilities = get_device_capabilities(device_path)
     return jsonify({"device": device_path, "capabilities": capabilities})
+
+@app.route("/api/video/options/<path:device_path>")
+def device_options(device_path):
+    """Returns parsed options (resolutions, framerates, pixel formats) for a specific video device."""
+    # URL decode the device path
+    device_path = "/" + device_path
+    options = parse_device_options(device_path)
+    return jsonify({"device": device_path, "options": options})
 
 @app.route("/api/video/controls/<path:device_path>")
 def camera_controls(device_path):
@@ -1274,6 +1348,7 @@ def auto_start_stream():
                             # Prepare stream data
                             stream_data = {
                                 "device": config["device"],
+                                "pixel_format": config.get("pixel_format", "YUYV"),  # Default to YUYV if not specified
                                 "resolution": config["resolution"],
                                 "framerate": config["framerate"],
                                 "bitrate": config["bitrate"],
@@ -1359,6 +1434,7 @@ def start_stream_internal(data):
     framerate = data.get("framerate")
     bitrate = data.get("bitrate")
     encoder = data.get("encoder")
+    pixel_format = data.get("pixel_format", "yuyv422")  # Default to YUYV
     srt_port = data.get("srt_port", 8888)
     stream_name = data.get("stream_name", "live")
 
@@ -1486,17 +1562,45 @@ def start_stream_internal(data):
     # Give MediaMTX an extra moment to be fully ready
     time.sleep(1)
     
-    # Optimized FFmpeg command for low latency streaming
-    ffmpeg_cmd = (
-        f"ffmpeg -f v4l2 -input_format yuyv422 -video_size {width}x{height} "
-        f"-framerate {framerate} -i {device} "
-        f"-c:v {encoder} -b:v {bitrate}k "
-        f"-g {int(framerate)} -keyint_min {int(framerate)} "  # GOP size = framerate for frequent keyframes
-        f"-sc_threshold 0 -force_key_frames 'expr:gte(t,n_forced*1)' "  # Force keyframes every second
-        f"-preset ultrafast -tune zerolatency "  # Low latency presets
-        f"-bufsize {int(bitrate)*2}k -maxrate {int(bitrate)*1.2}k "  # Buffer control
-        f"-f mpegts '{srt_url}'"
-    )
+    # Map pixel format names to FFmpeg input formats
+    pixel_format_map = {
+        'YUYV': 'yuyv422',
+        'MJPG': 'mjpeg',
+        'H264': 'h264',
+        'RGB24': 'rgb24',
+        'BGR24': 'bgr24',
+        'YUV420': 'yuv420p',
+        'NV12': 'nv12'
+    }
+    
+    # Get FFmpeg input format, default to yuyv422 if not found
+    input_format = pixel_format_map.get(pixel_format.upper(), pixel_format.lower())
+    
+    # Build FFmpeg command based on pixel format
+    if pixel_format.upper() == 'MJPG':
+        # For MJPEG input, we don't need input_format parameter
+        ffmpeg_cmd = (
+            f"ffmpeg -f v4l2 -video_size {width}x{height} "
+            f"-framerate {framerate} -i {device} "
+            f"-c:v {encoder} -b:v {bitrate}k "
+            f"-g {int(framerate)} -keyint_min {int(framerate)} "  # GOP size = framerate for frequent keyframes
+            f"-sc_threshold 0 -force_key_frames 'expr:gte(t,n_forced*1)' "  # Force keyframes every second
+            f"-preset ultrafast -tune zerolatency "  # Low latency presets
+            f"-bufsize {int(bitrate)*2}k -maxrate {int(bitrate)*1.2}k "  # Buffer control
+            f"-f mpegts '{srt_url}'"
+        )
+    else:
+        # For other formats, specify input format
+        ffmpeg_cmd = (
+            f"ffmpeg -f v4l2 -input_format {input_format} -video_size {width}x{height} "
+            f"-framerate {framerate} -i {device} "
+            f"-c:v {encoder} -b:v {bitrate}k "
+            f"-g {int(framerate)} -keyint_min {int(framerate)} "  # GOP size = framerate for frequent keyframes
+            f"-sc_threshold 0 -force_key_frames 'expr:gte(t,n_forced*1)' "  # Force keyframes every second
+            f"-preset ultrafast -tune zerolatency "  # Low latency presets
+            f"-bufsize {int(bitrate)*2}k -maxrate {int(bitrate)*1.2}k "  # Buffer control
+            f"-f mpegts '{srt_url}'"
+        )
     logging.info(f"Starting FFmpeg with command: {ffmpeg_cmd}")
 
     ffmpeg_process = subprocess.Popen(ffmpeg_cmd, shell=True, stderr=subprocess.PIPE, text=True, bufsize=1)

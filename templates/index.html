@@ -170,8 +170,17 @@
                     <label for="video-device" class="block mb-2">Video Input</label>
                     <div class="flex space-x-2">
                         <select id="video-device" class="flex-1 p-2 rounded input-field"></select>
-                        <button id="check-capabilities" class="btn btn-blue">Check Caps</button>
+                        <button id="detect-options" class="btn btn-blue">Detect Options</button>
                     </div>
+                </div>
+                <div>
+                    <label for="pixel-format" class="block mb-2">Pixel Format</label>
+                    <select id="pixel-format" class="w-full p-2 rounded input-field">
+                        <option value="YUYV" selected>YUYV (Default)</option>
+                        <option value="MJPG">MJPEG</option>
+                        <option value="H264">H.264</option>
+                        <option value="RGB24">RGB24</option>
+                    </select>
                 </div>
                 <div>
                     <label for="resolution" class="block mb-2">Resolution</label>
@@ -605,9 +614,86 @@ $(document).ready(function() {
     // --- Event Handlers ---
     $('#srt-port, #stream-name').on('input', updatePlaybackUrl);
 
+    $('#detect-options').click(function() {
+        const device = $('#video-device').val();
+        if (!device) {
+            alert("Please select a video device first.");
+            return;
+        }
+
+        $(this).text("Detecting...").prop('disabled', true);
+        
+        // Remove leading slash for API call
+        const devicePath = device.startsWith('/') ? device.substring(1) : device;
+        
+        $.get(`/api/video/options/${devicePath}`, function(data) {
+            if (data.options && !data.options.error) {
+                const options = data.options;
+                
+                // Update pixel format dropdown
+                const pixelFormatSelect = $('#pixel-format');
+                pixelFormatSelect.empty();
+                if (options.pixel_formats && options.pixel_formats.length > 0) {
+                    options.pixel_formats.forEach(function(format) {
+                        const selected = format === 'YUYV' ? 'selected' : '';
+                        pixelFormatSelect.append(`<option value="${format}" ${selected}>${format}</option>`);
+                    });
+                } else {
+                    pixelFormatSelect.append('<option value="YUYV" selected>YUYV (Default - No formats detected)</option>');
+                }
+                
+                // Update resolution dropdown
+                const resolutionSelect = $('#resolution');
+                resolutionSelect.empty();
+                if (options.resolutions && options.resolutions.length > 0) {
+                    options.resolutions.forEach(function(resolution, index) {
+                        const selected = (resolution === '1280x720' || index === 0) ? 'selected' : '';
+                        resolutionSelect.append(`<option ${selected}>${resolution}</option>`);
+                    });
+                } else {
+                    resolutionSelect.append('<option selected>1280x720 (Default - No resolutions detected)</option>');
+                }
+                
+                // Update framerate dropdown
+                const framerateSelect = $('#framerate');
+                framerateSelect.empty();
+                if (options.framerates && options.framerates.length > 0) {
+                    options.framerates.forEach(function(framerate, index) {
+                        const selected = (framerate === 30 || index === 0) ? 'selected' : '';
+                        framerateSelect.append(`<option ${selected}>${framerate}</option>`);
+                    });
+                } else {
+                    framerateSelect.append('<option selected>30 (Default - No framerates detected)</option>');
+                }
+                
+                const pixelFormatsText = options.pixel_formats && options.pixel_formats.length > 0 
+                    ? options.pixel_formats.join(', ') 
+                    : 'None detected';
+                const resolutionsText = options.resolutions && options.resolutions.length > 0 
+                    ? `${options.resolutions.length} options (${options.resolutions.slice(0, 3).join(', ')}${options.resolutions.length > 3 ? '...' : ''})`
+                    : 'None detected';
+                const frameratesText = options.framerates && options.framerates.length > 0 
+                    ? options.framerates.join(', ') + ' fps'
+                    : 'None detected';
+                    
+                alert(`Camera options detected and dropdowns updated!\n\n` +
+                      `Pixel Formats: ${pixelFormatsText}\n` +
+                      `Resolutions: ${resolutionsText}\n` +
+                      `Framerates: ${frameratesText}`);
+            } else {
+                alert("Failed to detect camera options: " + (data.options.error || "Unknown error"));
+            }
+        }).fail(function() {
+            alert("Failed to communicate with the server.");
+        }).always(function() {
+            $('#detect-options').text("Detect Options").prop('disabled', false);
+        });
+    });
+
     $('#start-stream').click(function() {
         const streamData = {
             device: $('#video-device').val(),
+            pixel_format: $('#pixel-format').val(),
             resolution: $('#resolution').val(),
             framerate: $('#framerate').val(),
             bitrate: $('#bitrate').val(),
@@ -1081,6 +1167,7 @@ $(document).ready(function() {
     function saveConfiguration() {
         const config = {
             device: $('#video-device').val(),
+            pixel_format: $('#pixel-format').val(),
             resolution: $('#resolution').val(),
             framerate: $('#framerate').val(),
             bitrate: $('#bitrate').val(),
@@ -1112,6 +1199,7 @@ $(document).ready(function() {
         $.get('/api/config/load', function(config) {
             // Load values into form fields
             if (config.device) $('#video-device').val(config.device);
+            if (config.pixel_format) $('#pixel-format').val(config.pixel_format);
             if (config.resolution) $('#resolution').val(config.resolution);
             if (config.framerate) $('#framerate').val(config.framerate);
             if (config.bitrate) $('#bitrate').val(config.bitrate);
@@ -1211,35 +1299,7 @@ $(document).ready(function() {
         alert('Configuration loaded!');
     });
 
-    // Check device capabilities
-    $('#check-capabilities').click(function() {
-        const device = $('#video-device').val();
-        if (!device) {
-            alert('Please select a video device first');
-            return;
-        }
-        
-        $(this).text('Checking...').prop('disabled', true);
-        
-        // Remove /dev/ prefix for API call
-        const devicePath = device.replace('/dev/', '');
-        
-        $.get(`/api/video/capabilities/${devicePath}`, function(data) {
-            // Show capabilities in a popup or log viewer
-            const logViewer = $('#log-viewer');
-            logViewer.text(`Device Capabilities for ${data.device}:\n\n${data.capabilities}`);
-            logViewer.scrollTop(0);
-            
-            // Scroll to diagnostics section
-            $('html, body').animate({
-                scrollTop: $('#log-viewer').offset().top - 100
-            }, 500);
-        }).fail(function() {
-            alert('Failed to get device capabilities');
-        }).always(function() {
-            $('#check-capabilities').text('Check Caps').prop('disabled', false);
-        });
-    });
+
 
     // Camera Controls
     function updateSliderValue(sliderId, valueId, suffix = '') {
