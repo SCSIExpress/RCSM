@@ -40,6 +40,10 @@ MEDIAMTX_BIN = os.path.join(MEDIAMTX_DIR, "mediamtx")
 MEDIAMTX_CONFIG = os.path.join(MEDIAMTX_DIR, "mediamtx.yml")
 LOG_FILE = "/tmp/radxa_stream_manager.log"
 
+# Update Configuration
+UPDATE_REPO = "SCSIExpress/RCSM"
+UPDATE_BRANCH = "main"  # Change to "develop" for beta updates
+
 # --- Globals for Stream Monitoring ---
 ffmpeg_process = None
 stream_stats = {}
@@ -982,10 +986,10 @@ def check_and_update():
         import zipfile
         import time
         
-        # GitHub repository information
-        repo_url = "https://github.com/SCSIExpress/RCSM"
-        api_url = "https://api.github.com/repos/SCSIExpress/RCSM/commits/main"
-        download_url = "https://github.com/SCSIExpress/RCSM/archive/refs/heads/main.zip"
+        # GitHub repository information (using configuration)
+        repo_url = f"https://github.com/{UPDATE_REPO}"
+        api_url = f"https://api.github.com/repos/{UPDATE_REPO}/commits/{UPDATE_BRANCH}"
+        download_url = f"https://github.com/{UPDATE_REPO}/archive/refs/heads/{UPDATE_BRANCH}.zip"
         
         # Get current directory and check write permissions
         current_dir = os.path.dirname(os.path.abspath(__file__))
