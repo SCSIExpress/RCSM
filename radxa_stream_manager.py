@@ -1,12 +1,13 @@
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# Radxa Zero 3E Streaming Manager
+# RCSM - RockChip Stream Manager
 #
 # This Python Flask application provides a web interface to manage
-# video streaming with ffmpeg-rockchip and MediaMTX on a Radxa Zero 3E.
+# video streaming with hardware acceleration on Radxa and Raspberry Pi devices.
+# Supports both rkmpp (Radxa) and h264_v4l2m2m (Raspberry Pi) encoders.
 #
-# v7: Fixes broken JS/CSS links and improves logging reliability.
+# v8: Added Raspberry Pi Zero 2W support with libcamera and hardware acceleration.
 #
-# Date: August 4, 2025
+# Date: December 9, 2024
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 import os
@@ -34,7 +35,37 @@ from flask import Flask, render_template, jsonify, request
 
 # --- Configuration ---
 APP_PORT = 80
-MEDIAMTX_URL = "https://github.com/bluenviron/mediamtx/releases/download/v1.13.1/mediamtx_v1.13.1_linux_arm64.tar.gz"
+
+# Platform detection
+def detect_platform():
+    """Detect if running on Radxa or Raspberry Pi"""
+    try:
+        with open('/proc/cpuinfo', 'r') as f:
+            cpuinfo = f.read().lower()
+        
+        if 'rockchip' in cpuinfo or 'rk3566' in cpuinfo:
+            return 'radxa'
+        elif 'raspberry pi' in cpuinfo or 'bcm' in cpuinfo:
+            return 'raspberry_pi'
+        else:
+            # Try to detect by checking for specific hardware
+            if os.path.exists('/dev/rga') or os.path.exists('/dev/mpp_service'):
+                return 'radxa'
+            elif os.path.exists('/dev/vchiq') or os.path.exists('/opt/vc/bin/vcgencmd'):
+                return 'raspberry_pi'
+    except:
+        pass
+    
+    return 'unknown'
+
+PLATFORM = detect_platform()
+
+# Platform-specific MediaMTX URLs
+if PLATFORM == 'raspberry_pi':
+    MEDIAMTX_URL = "https://github.com/bluenviron/mediamtx/releases/download/v1.13.1/mediamtx_v1.13.1_linux_armv7.tar.gz"
+else:
+    MEDIAMTX_URL = "https://github.com/bluenviron/mediamtx/releases/download/v1.13.1/mediamtx_v1.13.1_linux_arm64.tar.gz"
+
 MEDIAMTX_DIR = "/opt/mediamtx"
 MEDIAMTX_BIN = os.path.join(MEDIAMTX_DIR, "mediamtx")
 MEDIAMTX_CONFIG = os.path.join(MEDIAMTX_DIR, "mediamtx.yml")
@@ -81,8 +112,27 @@ def run_command(command, capture_output=True):
 def get_video_devices():
     """Gets a list of available video devices."""
     devices = []
+    
+    # Check for libcamera devices (Raspberry Pi CSI camera)
+    if PLATFORM == 'raspberry_pi':
+        try:
+            libcamera_output = run_command("libcamera-hello --list-cameras")
+            if libcamera_output and "Available cameras" in libcamera_output:
+                # Parse libcamera output
+                for line in libcamera_output.splitlines():
+                    if ":" in line and ("imx" in line.lower() or "ov" in line.lower() or "camera" in line.lower()):
+                        camera_info = line.strip()
+                        devices.append({
+                            "name": f"CSI Camera ({camera_info})",
+                            "path": "libcamera:0",
+                            "type": "libcamera"
+                        })
+                        break
+        except Exception as e:
+            logging.debug(f"libcamera not available: {e}")
+    
+    # Check for V4L2 devices
     try:
-        # Ensure v4l-utils is installed and the command runs
         output = run_command("v4l2-ctl --list-devices")
         if output:
             logging.info(f"v4l2-ctl output:\n{output}")
@@ -97,18 +147,34 @@ def get_video_devices():
                 else:
                     # This line is a device path
                     if current_device_name:
-                         devices.append({"name": current_device_name, "path": line})
+                         devices.append({
+                             "name": current_device_name, 
+                             "path": line,
+                             "type": "v4l2"
+                         })
                          current_device_name = None # Reset for next device block
         else:
             logging.warning("`v4l2-ctl --list-devices` produced no output.")
     except Exception as e:
         logging.error(f"Failed to get video devices: {e}")
+    
     return devices
 
 def get_device_capabilities(device_path):
     """Gets supported formats, resolutions and framerates for a video device."""
     try:
-        # Get supported formats
+        # Handle libcamera devices
+        if device_path.startswith("libcamera:"):
+            try:
+                libcamera_output = run_command("libcamera-hello --list-cameras")
+                if libcamera_output:
+                    return f"Libcamera device capabilities:\n{libcamera_output}"
+                else:
+                    return "Libcamera device detected but no detailed capabilities available"
+            except Exception as e:
+                return f"Error getting libcamera capabilities: {str(e)}"
+        
+        # Handle V4L2 devices
         formats_output = run_command(f"v4l2-ctl --device={device_path} --list-formats-ext")
         if formats_output:
             logging.info(f"Device {device_path} capabilities:\n{formats_output}")
@@ -121,8 +187,18 @@ def get_device_capabilities(device_path):
         return f"Error: {str(e)}"
 
 def parse_device_options(device_path):
-    """Parse v4l2-ctl output to extract available resolutions, framerates, and pixel formats."""
+    """Parse device output to extract available resolutions, framerates, and pixel formats."""
     try:
+        # Handle libcamera devices
+        if device_path.startswith("libcamera:"):
+            # Provide common options for libcamera devices
+            return {
+                "pixel_formats": ["YUV420", "RGB24"],
+                "resolutions": ["1920x1080", "1640x1232", "1280x720", "640x480"],
+                "framerates": [30, 25, 15, 10]
+            }
+        
+        # Handle V4L2 devices
         formats_output = run_command(f"v4l2-ctl --device={device_path} --list-formats-ext")
         if not formats_output:
             return {"error": "No format information available"}
@@ -189,6 +265,11 @@ def parse_device_options(device_path):
 def get_camera_controls(device_path):
     """Gets available camera controls for a video device."""
     try:
+        # Handle libcamera devices
+        if device_path.startswith("libcamera:"):
+            return "Libcamera controls available through libcamera-still/libcamera-vid commands"
+        
+        # Handle V4L2 devices
         controls_output = run_command(f"v4l2-ctl --device={device_path} --list-ctrls")
         if controls_output:
             logging.info(f"Device {device_path} controls:\n{controls_output}")
@@ -202,6 +283,12 @@ def get_camera_controls(device_path):
 def set_camera_control(device_path, control_name, value):
     """Sets a camera control value."""
     try:
+        # Handle libcamera devices
+        if device_path.startswith("libcamera:"):
+            logging.info(f"Libcamera control setting not implemented for {control_name}={value}")
+            return False
+        
+        # Handle V4L2 devices
         result = run_command(f"v4l2-ctl --device={device_path} --set-ctrl={control_name}={value}")
         logging.info(f"Set {control_name}={value} on {device_path}: {result}")
         return True
@@ -212,6 +299,11 @@ def set_camera_control(device_path, control_name, value):
 def get_camera_control_value(device_path, control_name):
     """Gets current value of a camera control."""
     try:
+        # Handle libcamera devices
+        if device_path.startswith("libcamera:"):
+            return None
+        
+        # Handle V4L2 devices
         result = run_command(f"v4l2-ctl --device={device_path} --get-ctrl={control_name}")
         if result and ":" in result:
             value = result.split(":")[1].strip()
@@ -494,7 +586,39 @@ def api_status():
         "temperature": get_device_temperature(),
         "cpu_usage": get_cpu_usage(),
         "memory_usage": get_memory_usage(),
+        "platform": PLATFORM
     })
+
+@app.route("/api/platform")
+def platform_info():
+    """Returns platform-specific information."""
+    platform_data = {
+        "platform": PLATFORM,
+        "supported_encoders": [],
+        "libcamera_available": False,
+        "hardware_acceleration": False
+    }
+    
+    if PLATFORM == 'raspberry_pi':
+        platform_data["supported_encoders"] = ["h264_v4l2m2m", "libx264"]
+        platform_data["hardware_acceleration"] = True
+        
+        # Check if libcamera is available
+        try:
+            libcamera_check = run_command("libcamera-hello --version")
+            platform_data["libcamera_available"] = bool(libcamera_check)
+        except:
+            platform_data["libcamera_available"] = False
+            
+    elif PLATFORM == 'radxa':
+        platform_data["supported_encoders"] = ["h264_rkmpp", "h264_rkmpp_encoder", "libx264"]
+        platform_data["hardware_acceleration"] = True
+        
+    else:
+        platform_data["supported_encoders"] = ["libx264", "libx265"]
+        platform_data["hardware_acceleration"] = False
+    
+    return jsonify(platform_data)
 
 @app.route("/api/video/devices")
 def video_devices():
@@ -1289,35 +1413,72 @@ def run_tests():
     else:
         results.append({"name": "MediaMTX Executable", "status": "fail", "message": f"Not found or not executable at {MEDIAMTX_BIN}"})
 
-    # 2. Test FFmpeg installation and rkmpp support
+    # 2. Platform-specific FFmpeg tests
     ffmpeg_path = shutil.which("ffmpeg")
     if ffmpeg_path:
         try:
             output = run_command("ffmpeg -encoders")
-            if "rkmpp" in output:
-                results.append({"name": "FFmpeg Rockchip Support", "status": "pass", "message": "FFmpeg found with rkmpp encoders."})
+            
+            if PLATFORM == 'radxa':
+                if "rkmpp" in output:
+                    results.append({"name": "FFmpeg Rockchip Support", "status": "pass", "message": "FFmpeg found with rkmpp encoders."})
+                else:
+                    results.append({"name": "FFmpeg Rockchip Support", "status": "fail", "message": "FFmpeg found, but rkmpp encoders are missing. Re-run setup.sh."})
+            elif PLATFORM == 'raspberry_pi':
+                if "h264_v4l2m2m" in output:
+                    results.append({"name": "FFmpeg Raspberry Pi Support", "status": "pass", "message": "FFmpeg found with h264_v4l2m2m encoder."})
+                else:
+                    results.append({"name": "FFmpeg Raspberry Pi Support", "status": "fail", "message": "FFmpeg found, but h264_v4l2m2m encoder is missing."})
             else:
-                results.append({"name": "FFmpeg Rockchip Support", "status": "fail", "message": "FFmpeg found, but rkmpp encoders are missing. Re-run setup.sh."})
+                results.append({"name": "FFmpeg Support", "status": "pass", "message": "FFmpeg found with software encoders."})
+                
         except Exception as e:
-            results.append({"name": "FFmpeg Rockchip Support", "status": "fail", "message": f"Error running ffmpeg: {e}"})
+            results.append({"name": "FFmpeg Support", "status": "fail", "message": f"Error running ffmpeg: {e}"})
     else:
-        results.append({"name": "FFmpeg Rockchip Support", "status": "fail", "message": "ffmpeg command not found in PATH."})
+        results.append({"name": "FFmpeg Support", "status": "fail", "message": "ffmpeg command not found in PATH."})
 
     # 3. Test for video devices
-    if get_video_devices():
-        results.append({"name": "Video Device Detection", "status": "pass", "message": "At least one video device was found."})
+    devices = get_video_devices()
+    if devices:
+        device_names = [d.get('name', 'Unknown') for d in devices]
+        results.append({"name": "Video Device Detection", "status": "pass", "message": f"Found devices: {', '.join(device_names)}"})
     else:
-        results.append({"name": "Video Device Detection", "status": "fail", "message": "No video devices found by v4l2-ctl."})
+        results.append({"name": "Video Device Detection", "status": "fail", "message": "No video devices found."})
 
-    # 4. Test device permissions
-    for dev_path in ["/dev/rga", "/dev/mpp_service"]:
-        if os.path.exists(dev_path):
-            if os.access(dev_path, os.R_OK | os.W_OK):
-                results.append({"name": f"Permissions for {dev_path}", "status": "pass", "message": "Read/Write access granted."})
+    # 4. Platform-specific device permission tests
+    if PLATFORM == 'radxa':
+        for dev_path in ["/dev/rga", "/dev/mpp_service"]:
+            if os.path.exists(dev_path):
+                if os.access(dev_path, os.R_OK | os.W_OK):
+                    results.append({"name": f"Permissions for {dev_path}", "status": "pass", "message": "Read/Write access granted."})
+                else:
+                    results.append({"name": f"Permissions for {dev_path}", "status": "fail", "message": "Access denied. Check udev rules and user groups."})
             else:
-                results.append({"name": f"Permissions for {dev_path}", "status": "fail", "message": "Access denied. Check udev rules and user groups."})
-        else:
-            results.append({"name": f"Permissions for {dev_path}", "status": "fail", "message": "Device does not exist."})
+                results.append({"name": f"Permissions for {dev_path}", "status": "fail", "message": "Device does not exist."})
+    elif PLATFORM == 'raspberry_pi':
+        # Test libcamera availability
+        try:
+            libcamera_output = run_command("libcamera-hello --version")
+            if libcamera_output:
+                results.append({"name": "Libcamera Support", "status": "pass", "message": "libcamera tools are available."})
+            else:
+                results.append({"name": "Libcamera Support", "status": "fail", "message": "libcamera tools not found."})
+        except Exception as e:
+            results.append({"name": "Libcamera Support", "status": "fail", "message": f"Error checking libcamera: {e}"})
+        
+        # Test GPU memory split
+        try:
+            gpu_mem = run_command("vcgencmd get_mem gpu")
+            if gpu_mem and "gpu=" in gpu_mem:
+                mem_value = int(gpu_mem.split("=")[1].replace("M", ""))
+                if mem_value >= 64:
+                    results.append({"name": "GPU Memory", "status": "pass", "message": f"GPU memory: {mem_value}M (sufficient for hardware encoding)"})
+                else:
+                    results.append({"name": "GPU Memory", "status": "fail", "message": f"GPU memory: {mem_value}M (recommend 128M+ for hardware encoding)"})
+            else:
+                results.append({"name": "GPU Memory", "status": "fail", "message": "Could not determine GPU memory allocation"})
+        except Exception as e:
+            results.append({"name": "GPU Memory", "status": "fail", "message": f"Error checking GPU memory: {e}"})
     
     logging.info("--- System Test Finished ---")
     return jsonify(results)
@@ -1559,52 +1720,80 @@ def start_stream_internal(data):
         logging.error(f"MediaMTX failed to start. Recent logs: {final_logs}")
         raise RuntimeError(f"MediaMTX failed to start or SRT server not ready on port {srt_port}")
 
-    # 3. Start FFmpeg
+    # 3. Start FFmpeg - Platform-specific command generation
     width, height = resolution.split("x")
     srt_url = f"srt://127.0.0.1:{srt_port}?streamid=publish:{stream_name}"
     
     # Give MediaMTX an extra moment to be fully ready
     time.sleep(1)
     
-    # Map pixel format names to FFmpeg input formats
-    pixel_format_map = {
-        'YUYV': 'yuyv422',
-        'MJPG': 'mjpeg',
-        'H264': 'h264',
-        'RGB24': 'rgb24',
-        'BGR24': 'bgr24',
-        'YUV420': 'yuv420p',
-        'NV12': 'nv12'
-    }
-    
-    # Get FFmpeg input format, default to yuyv422 if not found
-    input_format = pixel_format_map.get(pixel_format.upper(), pixel_format.lower())
-    
-    # Build FFmpeg command based on pixel format
-    if pixel_format.upper() == 'MJPG':
-        # For MJPEG input, we don't need input_format parameter
+    # Build FFmpeg command based on platform and device type
+    if device.startswith("libcamera:"):
+        # Raspberry Pi libcamera input
+        camera_index = device.split(":")[1] if ":" in device else "0"
+        
+        # Use h264_v4l2m2m encoder for Raspberry Pi hardware acceleration
+        if encoder in ["h264_rkmpp", "h264_rkmpp_encoder"]:
+            encoder = "h264_v4l2m2m"  # Use Pi's hardware encoder
+        
         ffmpeg_cmd = (
-            f"ffmpeg -f v4l2 -video_size {width}x{height} "
-            f"-framerate {framerate} -i {device} "
+            f"libcamera-vid --codec yuv420 --width {width} --height {height} "
+            f"--framerate {framerate} --timeout 0 --inline --listen -o - | "
+            f"ffmpeg -f rawvideo -pix_fmt yuv420p -s {width}x{height} "
+            f"-framerate {framerate} -i - "
             f"-c:v {encoder} -b:v {bitrate}k "
-            f"-g {int(framerate)} -keyint_min {int(framerate)} "  # GOP size = framerate for frequent keyframes
-            f"-sc_threshold 0 -force_key_frames 'expr:gte(t,n_forced*1)' "  # Force keyframes every second
-            f"-preset ultrafast -tune zerolatency "  # Low latency presets
-            f"-bufsize {int(bitrate)*2}k -maxrate {int(bitrate)*1.2}k "  # Buffer control
+            f"-g {int(framerate)} -keyint_min {int(framerate)} "
+            f"-preset ultrafast -tune zerolatency "
+            f"-bufsize {int(bitrate)*2}k -maxrate {int(bitrate)*1.2}k "
             f"-f mpegts '{srt_url}'"
         )
     else:
-        # For other formats, specify input format
-        ffmpeg_cmd = (
-            f"ffmpeg -f v4l2 -input_format {input_format} -video_size {width}x{height} "
-            f"-framerate {framerate} -i {device} "
-            f"-c:v {encoder} -b:v {bitrate}k "
-            f"-g {int(framerate)} -keyint_min {int(framerate)} "  # GOP size = framerate for frequent keyframes
-            f"-sc_threshold 0 -force_key_frames 'expr:gte(t,n_forced*1)' "  # Force keyframes every second
-            f"-preset ultrafast -tune zerolatency "  # Low latency presets
-            f"-bufsize {int(bitrate)*2}k -maxrate {int(bitrate)*1.2}k "  # Buffer control
-            f"-f mpegts '{srt_url}'"
-        )
+        # V4L2 device input (USB cameras, etc.)
+        # Map pixel format names to FFmpeg input formats
+        pixel_format_map = {
+            'YUYV': 'yuyv422',
+            'MJPG': 'mjpeg',
+            'H264': 'h264',
+            'RGB24': 'rgb24',
+            'BGR24': 'bgr24',
+            'YUV420': 'yuv420p',
+            'NV12': 'nv12'
+        }
+        
+        # Get FFmpeg input format, default to yuyv422 if not found
+        input_format = pixel_format_map.get(pixel_format.upper(), pixel_format.lower())
+        
+        # Platform-specific encoder selection
+        if PLATFORM == 'raspberry_pi':
+            if encoder in ["h264_rkmpp", "h264_rkmpp_encoder"]:
+                encoder = "h264_v4l2m2m"  # Use Pi's hardware encoder
+        
+        # Build FFmpeg command based on pixel format
+        if pixel_format.upper() == 'MJPG':
+            # For MJPEG input, we don't need input_format parameter
+            ffmpeg_cmd = (
+                f"ffmpeg -f v4l2 -video_size {width}x{height} "
+                f"-framerate {framerate} -i {device} "
+                f"-c:v {encoder} -b:v {bitrate}k "
+                f"-g {int(framerate)} -keyint_min {int(framerate)} "
+                f"-sc_threshold 0 -force_key_frames 'expr:gte(t,n_forced*1)' "
+                f"-preset ultrafast -tune zerolatency "
+                f"-bufsize {int(bitrate)*2}k -maxrate {int(bitrate)*1.2}k "
+                f"-f mpegts '{srt_url}'"
+            )
+        else:
+            # For other formats, specify input format
+            ffmpeg_cmd = (
+                f"ffmpeg -f v4l2 -input_format {input_format} -video_size {width}x{height} "
+                f"-framerate {framerate} -i {device} "
+                f"-c:v {encoder} -b:v {bitrate}k "
+                f"-g {int(framerate)} -keyint_min {int(framerate)} "
+                f"-sc_threshold 0 -force_key_frames 'expr:gte(t,n_forced*1)' "
+                f"-preset ultrafast -tune zerolatency "
+                f"-bufsize {int(bitrate)*2}k -maxrate {int(bitrate)*1.2}k "
+                f"-f mpegts '{srt_url}'"
+            )
+    
     logging.info(f"Starting FFmpeg with command: {ffmpeg_cmd}")
 
     ffmpeg_process = subprocess.Popen(ffmpeg_cmd, shell=True, stderr=subprocess.PIPE, text=True, bufsize=1)

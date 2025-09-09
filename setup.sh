@@ -2,9 +2,10 @@
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # Setup Script for Radxa Camera Stream Manager (RCSM)
+# Now supports both Radxa Zero 3E and Raspberry Pi Zero 2W
 #
 # This script installs all necessary dependencies, downloads MediaMTX,
-# compiles ffmpeg-rockchip, downloads application files from GitHub,
+# compiles platform-specific ffmpeg, downloads application files from GitHub,
 # and sets up the systemd service.
 #
 # Usage:
@@ -12,13 +13,36 @@
 #   or
 #   wget -qO- https://raw.githubusercontent.com/SCSIExpress/RCSM/main/setup.sh | sudo bash
 #
-# v6: Downloads application files from GitHub repository automatically.
+# v7: Added Raspberry Pi Zero 2W support with hardware acceleration.
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 set -e
 
+# --- Platform Detection ---
+detect_platform() {
+    if grep -q "rockchip\|rk3566" /proc/cpuinfo 2>/dev/null; then
+        echo "radxa"
+    elif grep -q "Raspberry Pi\|BCM" /proc/cpuinfo 2>/dev/null; then
+        echo "raspberry_pi"
+    elif [ -e /dev/rga ] || [ -e /dev/mpp_service ]; then
+        echo "radxa"
+    elif [ -e /dev/vchiq ] || [ -e /opt/vc/bin/vcgencmd ]; then
+        echo "raspberry_pi"
+    else
+        echo "unknown"
+    fi
+}
+
+PLATFORM=$(detect_platform)
+echo "Detected platform: $PLATFORM"
+
 # --- Configuration ---
-MEDIAMTX_URL="https://github.com/bluenviron/mediamtx/releases/download/v1.13.1/mediamtx_v1.13.1_linux_arm64.tar.gz"
+if [ "$PLATFORM" = "raspberry_pi" ]; then
+    MEDIAMTX_URL="https://github.com/bluenviron/mediamtx/releases/download/v1.13.1/mediamtx_v1.13.1_linux_armv7.tar.gz"
+else
+    MEDIAMTX_URL="https://github.com/bluenviron/mediamtx/releases/download/v1.13.1/mediamtx_v1.13.1_linux_arm64.tar.gz"
+fi
+
 MEDIAMTX_DIR="/opt/mediamtx"
 APP_DIR="/opt/radxa-stream-manager"
 APP_USER="root" # Or a dedicated user
@@ -36,11 +60,35 @@ print_success() {
 # --- 1. Install System Dependencies ---
 print_info "Updating package lists and installing dependencies..."
 apt-get update
-# Add meson and ninja-build for manual compilation, wget for downloading files
-apt-get install -y build-essential cmake git libdrm-dev \
-    libx264-dev libx265-dev pkg-config \
-    python3-pip python3-venv v4l-utils meson ninja-build \
-    libssl-dev net-tools wget curl network-manager
+
+# Common dependencies
+COMMON_DEPS="build-essential cmake git pkg-config python3-pip python3-venv v4l-utils \
+    libssl-dev net-tools wget curl network-manager libx264-dev libx265-dev"
+
+# Platform-specific dependencies
+if [ "$PLATFORM" = "raspberry_pi" ]; then
+    print_info "Installing Raspberry Pi specific dependencies..."
+    apt-get install -y $COMMON_DEPS \
+        libcamera-apps libcamera-dev \
+        libraspberrypi-dev libraspberrypi0 \
+        meson ninja-build
+    
+    # Enable camera and GPU memory
+    if ! grep -q "start_x=1" /boot/config.txt; then
+        echo "start_x=1" >> /boot/config.txt
+    fi
+    if ! grep -q "gpu_mem=" /boot/config.txt; then
+        echo "gpu_mem=128" >> /boot/config.txt
+    fi
+    
+elif [ "$PLATFORM" = "radxa" ]; then
+    print_info "Installing Radxa specific dependencies..."
+    apt-get install -y $COMMON_DEPS \
+        libdrm-dev meson ninja-build
+else
+    print_info "Installing generic dependencies..."
+    apt-get install -y $COMMON_DEPS
+fi
 
 # --- 2. Setup Python Environment ---
 print_info "Setting up Python virtual environment..."
@@ -65,48 +113,55 @@ else
     print_success "MediaMTX already installed. Skipping."
 fi
 
-# --- 4. Manually Compile and Install MPP and RGA ---
+# --- 4. Platform-specific Hardware Acceleration Libraries ---
 mkdir -p $BUILD_DIR
 
-# Build MPP
-if [ ! -f "/usr/lib/aarch64-linux-gnu/librockchip_mpp.so" ]; then
-    print_info "Cloning and building rkmpp..."
-    if [ ! -d "$BUILD_DIR/rkmpp" ]; then
-        git clone -b jellyfin-mpp --depth=1 https://github.com/nyanmisaka/mpp.git $BUILD_DIR/rkmpp
+if [ "$PLATFORM" = "radxa" ]; then
+    # Build MPP for Radxa
+    if [ ! -f "/usr/lib/aarch64-linux-gnu/librockchip_mpp.so" ]; then
+        print_info "Cloning and building rkmpp..."
+        if [ ! -d "$BUILD_DIR/rkmpp" ]; then
+            git clone -b jellyfin-mpp --depth=1 https://github.com/nyanmisaka/mpp.git $BUILD_DIR/rkmpp
+        fi
+        pushd $BUILD_DIR/rkmpp
+        mkdir -p build && cd build
+        cmake \
+            -DCMAKE_INSTALL_PREFIX=/usr \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=ON \
+            -DBUILD_TEST=OFF \
+            ..
+        make -j$(nproc)
+        make install
+        popd
+    else
+        print_success "librockchip_mpp.so already installed. Skipping rkmpp build."
     fi
-    pushd $BUILD_DIR/rkmpp
-    mkdir -p build && cd build
-    cmake \
-        -DCMAKE_INSTALL_PREFIX=/usr \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DBUILD_SHARED_LIBS=ON \
-        -DBUILD_TEST=OFF \
-        ..
-    make -j$(nproc)
-    make install
-    popd
-else
-    print_success "librockchip_mpp.so already installed. Skipping rkmpp build."
-fi
 
-
-# Build RGA
-if [ ! -f "/usr/lib/aarch64-linux-gnu/librga.so" ]; then
-    print_info "Cloning and building rkrga..."
-    if [ ! -d "$BUILD_DIR/rkrga" ]; then
-        git clone -b jellyfin-rga --depth=1 https://github.com/nyanmisaka/rk-mirrors.git $BUILD_DIR/rkrga
+    # Build RGA for Radxa
+    if [ ! -f "/usr/lib/aarch64-linux-gnu/librga.so" ]; then
+        print_info "Cloning and building rkrga..."
+        if [ ! -d "$BUILD_DIR/rkrga" ]; then
+            git clone -b jellyfin-rga --depth=1 https://github.com/nyanmisaka/rk-mirrors.git $BUILD_DIR/rkrga
+        fi
+        meson setup $BUILD_DIR/rkrga $BUILD_DIR/rkrga_build \
+            --prefix=/usr \
+            --libdir=lib \
+            --buildtype=release \
+            --default-library=shared \
+            -Dcpp_args=-fpermissive \
+            -Dlibdrm=false \
+            -Dlibrga_demo=false
+        ninja -C $BUILD_DIR/rkrga_build install
+    else
+        print_success "librga.so already installed. Skipping rkrga build."
     fi
-    meson setup $BUILD_DIR/rkrga $BUILD_DIR/rkrga_build \
-        --prefix=/usr \
-        --libdir=lib \
-        --buildtype=release \
-        --default-library=shared \
-        -Dcpp_args=-fpermissive \
-        -Dlibdrm=false \
-        -Dlibrga_demo=false
-    ninja -C $BUILD_DIR/rkrga_build install
-else
-    print_success "librga.so already installed. Skipping rkrga build."
+
+elif [ "$PLATFORM" = "raspberry_pi" ]; then
+    print_info "Raspberry Pi hardware acceleration is provided by the system packages."
+    # Ensure V4L2 M2M drivers are loaded
+    modprobe bcm2835-v4l2 || true
+    echo "bcm2835-v4l2" >> /etc/modules || true
 fi
 
 # Build SRT
@@ -131,21 +186,49 @@ else
     print_success "SRT library >= 1.3.0 already installed. Skipping SRT build."
 fi
 
-# --- 5. Compile and Install ffmpeg-rockchip ---
-if ! command -v ffmpeg &> /dev/null || ! ffmpeg -version 2>/dev/null | grep -q "enable-rkmpp" || ! ffmpeg -protocols 2>/dev/null | grep -q "srt"; then
-    print_info "Cloning and building ffmpeg-rockchip..."
-    if [ ! -d "$BUILD_DIR/ffmpeg" ]; then
-        git clone --depth=1 https://github.com/nyanmisaka/ffmpeg-rockchip.git $BUILD_DIR/ffmpeg
+# --- 5. Platform-specific FFmpeg Installation ---
+if [ "$PLATFORM" = "radxa" ]; then
+    # Compile ffmpeg-rockchip for Radxa
+    if ! command -v ffmpeg &> /dev/null || ! ffmpeg -version 2>/dev/null | grep -q "enable-rkmpp" || ! ffmpeg -protocols 2>/dev/null | grep -q "srt"; then
+        print_info "Cloning and building ffmpeg-rockchip..."
+        if [ ! -d "$BUILD_DIR/ffmpeg" ]; then
+            git clone --depth=1 https://github.com/nyanmisaka/ffmpeg-rockchip.git $BUILD_DIR/ffmpeg
+        fi
+        pushd $BUILD_DIR/ffmpeg
+        # Configure with all required options including SRT support
+        ./configure --prefix=/usr --enable-gpl --enable-version3 --enable-libdrm --enable-rkmpp --enable-rkrga --enable-libx264 --enable-libx265 --enable-libsrt --enable-ffplay
+        make -j$(nproc)
+        make install
+        popd
+    else
+         print_success "ffmpeg with rkmpp support already installed. Skipping build."
     fi
-    pushd $BUILD_DIR/ffmpeg
-    # Configure with all required options including SRT support
-    ./configure --prefix=/usr --enable-gpl --enable-version3 --enable-libdrm --enable-rkmpp --enable-rkrga --enable-libx264 --enable-libx265 --enable-libsrt --enable-ffplay
-    make -j$(nproc)
-    make install
-    popd
+
+elif [ "$PLATFORM" = "raspberry_pi" ]; then
+    # For Raspberry Pi, use standard FFmpeg with V4L2 M2M support
+    if ! command -v ffmpeg &> /dev/null || ! ffmpeg -encoders 2>/dev/null | grep -q "h264_v4l2m2m" || ! ffmpeg -protocols 2>/dev/null | grep -q "srt"; then
+        print_info "Building FFmpeg with Raspberry Pi hardware acceleration support..."
+        if [ ! -d "$BUILD_DIR/ffmpeg" ]; then
+            git clone --depth=1 https://github.com/FFmpeg/FFmpeg.git $BUILD_DIR/ffmpeg
+        fi
+        pushd $BUILD_DIR/ffmpeg
+        # Configure with V4L2 M2M and SRT support
+        ./configure --prefix=/usr --enable-gpl --enable-version3 \
+            --enable-libx264 --enable-libx265 --enable-libsrt \
+            --enable-v4l2-m2m --enable-libdrm --enable-ffplay
+        make -j$(nproc)
+        make install
+        popd
+    else
+        print_success "ffmpeg with hardware acceleration already installed. Skipping build."
+    fi
+
 else
-     print_success "ffmpeg with rkmpp support already installed. Skipping build."
+    # Generic FFmpeg installation
+    print_info "Installing standard FFmpeg..."
+    apt-get install -y ffmpeg
 fi
+
 ldconfig
 
 # --- 6. Download and Install Application Files ---
@@ -184,7 +267,8 @@ print_info "Setting up udev rules for media devices..."
 groupadd -f video
 usermod -aG video $APP_USER
 
-cat > /etc/udev/rules.d/99-rockchip-media.rules << EOL
+if [ "$PLATFORM" = "radxa" ]; then
+    cat > /etc/udev/rules.d/99-rockchip-media.rules << EOL
 KERNEL=="rga", GROUP="video", MODE="0660"
 KERNEL=="mpp_service", GROUP="video", MODE="0660"
 KERNEL=="vpu_service", GROUP="video", MODE="0660"
@@ -192,6 +276,18 @@ KERNEL=="hevc_service", GROUP="video", MODE="0660"
 KERNEL=="dma_heap", GROUP="video", MODE="0660"
 SUBSYSTEM=="dri", GROUP="video", MODE="0660"
 EOL
+
+elif [ "$PLATFORM" = "raspberry_pi" ]; then
+    cat > /etc/udev/rules.d/99-raspberry-pi-media.rules << EOL
+SUBSYSTEM=="vchiq", GROUP="video", MODE="0660"
+SUBSYSTEM=="dri", GROUP="video", MODE="0660"
+KERNEL=="vcsm-cma", GROUP="video", MODE="0660"
+KERNEL=="video*", GROUP="video", MODE="0660"
+EOL
+    
+    # Add user to additional Pi-specific groups
+    usermod -aG video,render $APP_USER
+fi
 
 # Reload udev rules
 udevadm control --reload-rules
@@ -260,6 +356,7 @@ systemctl restart radxa-stream-manager
 print_success "RCSM Setup complete!"
 echo ""
 echo "🎉 Radxa Camera Stream Manager has been installed successfully!"
+echo "   Platform: $PLATFORM"
 echo ""
 echo "📱 Web Interface: http://$(hostname -I | awk '{print $1}'):80"
 echo "📱 Or access via: http://localhost:80"
@@ -273,4 +370,19 @@ echo "   - Check logs: sudo journalctl -u radxa-stream-manager -f"
 echo "   - Restart app: sudo systemctl restart radxa-stream-manager"
 echo "   - Connect Tailscale: sudo tailscale up"
 echo ""
+
+if [ "$PLATFORM" = "raspberry_pi" ]; then
+    echo "🍓 Raspberry Pi Specific Notes:"
+    echo "   - Reboot required to enable camera and GPU memory settings"
+    echo "   - CSI camera will appear as 'libcamera:0' in device list"
+    echo "   - Hardware encoder: h264_v4l2m2m"
+    echo ""
+fi
+
 echo "📖 Documentation: https://github.com/SCSIExpress/RCSM"
+
+if [ "$PLATFORM" = "raspberry_pi" ]; then
+    echo ""
+    echo "⚠️  REBOOT REQUIRED for Raspberry Pi camera support!"
+    echo "   Run: sudo reboot"
+fi

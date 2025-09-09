@@ -1,23 +1,31 @@
 # RCSM - RockChip Stream Manager
 
-A web-based interface for managing camera streams on Radxa single-board computers. This application provides an intuitive way to start, stop, and monitor camera streams with real-time status updates.
+A web-based interface for managing camera streams on Radxa and Raspberry Pi single-board computers. This application provides an intuitive way to start, stop, and monitor camera streams with real-time status updates and hardware acceleration support.
 
 ## Features
 
 - 🎥 **Stream Management**: Start and stop camera streams with a single click
-- 🔍 **Smart Camera Detection**: Automatically detect available resolutions, framerates, and pixel formats using v4l2-ctl
+- 🔍 **Smart Camera Detection**: Automatically detect available resolutions, framerates, and pixel formats
+- 🚀 **Hardware Acceleration**: Platform-specific hardware encoders (rkmpp for Radxa, h264_v4l2m2m for Raspberry Pi)
+- 📷 **Multi-Camera Support**: V4L2 USB cameras and libcamera CSI cameras (Raspberry Pi)
 - 🌐 **Web Interface**: Clean, responsive web UI accessible from any device
 - 📊 **Real-time Status**: Live updates on stream status and system information
 - 🔧 **Easy Setup**: Automated installation script for quick deployment
 - 📱 **Mobile Friendly**: Responsive design works on desktop and mobile devices
+- 🌍 **Multi-Platform**: Supports both Radxa (RK3566) and Raspberry Pi Zero 2W
 
 ## Quick Start
 
 ### Prerequisites
 
-- RockChip single-board computer (Rock 5B, Rock 4, etc.)
+**Supported Platforms:**
+- **Radxa**: Zero 3E, Rock 5B, Rock 4, and other RK3566-based boards
+- **Raspberry Pi**: Zero 2W, Pi 4, Pi 5 (with hardware acceleration support)
+
+**Requirements:**
 - Python 3.6 or higher
-- Camera connected to your Radxa device
+- Camera connected to your device (USB or CSI)
+- Internet connection for installation
 
 ### Installation
 
@@ -27,17 +35,33 @@ curl -fsSL https://raw.githubusercontent.com/SCSIExpress/RCSM/main/setup.sh | su
 ```
 
 That's it! The installer will:
+- Automatically detect your platform (Radxa or Raspberry Pi)
 - Download all required files from GitHub
-- Install dependencies automatically  
+- Install platform-specific dependencies and hardware acceleration
 - Set up and start the services
 - Configure everything for you
 
+**For Raspberry Pi users:** A reboot is required after installation to enable camera and GPU memory settings.
+
 **Access the web interface:**
 ```
-http://your-radxa-ip:80
+http://your-device-ip:80
 ```
 
 The setup script handles everything automatically - no need to clone the repository or manually start services.
+
+### Platform-Specific Installation Notes
+
+**Raspberry Pi Zero 2W:**
+- Ensure you have a compatible camera (CSI or USB)
+- The installer will configure GPU memory split to 128MB
+- A reboot is required after installation
+- CSI cameras will appear as `libcamera:0` in the device list
+
+**Radxa Zero 3E:**
+- Hardware acceleration is automatically configured
+- Both USB and MIPI CSI cameras are supported
+- No reboot required after installation
 
 ## Usage
 
@@ -47,9 +71,24 @@ The web interface provides:
 
 - **Stream Control**: Start/Stop buttons for camera streaming
 - **Camera Detection**: Automatic detection of supported resolutions, framerates, and pixel formats
+- **Platform Detection**: Automatically detects and optimizes for your hardware
+- **Hardware Acceleration**: Uses platform-specific encoders for optimal performance
 - **Status Display**: Real-time stream status indicator
 - **System Info**: Current system status and configuration
 - **Responsive Design**: Works on desktop, tablet, and mobile devices
+
+### Platform-Specific Features
+
+**Radxa (RK3566-based boards):**
+- Hardware-accelerated encoding with rkmpp
+- RGA hardware scaling support
+- V4L2 camera detection and control
+
+**Raspberry Pi:**
+- libcamera support for CSI cameras
+- h264_v4l2m2m hardware encoding
+- GPU memory optimization
+- V4L2 USB camera support
 
 ### API Endpoints
 
@@ -67,7 +106,9 @@ The application automatically detects camera capabilities and generates optimize
 3. **Configure Stream**: Select optimal settings based on detected capabilities
 4. **Save Configuration**: Store settings for automatic startup
 
-The system uses FFmpeg with hardware acceleration for efficient streaming on Radxa devices.
+The system uses FFmpeg with platform-specific hardware acceleration for efficient streaming:
+- **Radxa**: rkmpp encoder with RGA scaling
+- **Raspberry Pi**: h264_v4l2m2m encoder with libcamera integration
 
 ## Troubleshooting
 
@@ -75,7 +116,8 @@ The system uses FFmpeg with hardware acceleration for efficient streaming on Rad
 
 **Stream won't start:**
 - Verify camera is connected and detected: `ls /dev/video*`
-- Check GStreamer installation: `gst-launch-1.0 --version`
+- For Raspberry Pi CSI camera: `libcamera-hello --list-cameras`
+- Check FFmpeg installation: `ffmpeg -version`
 - Ensure no other applications are using the camera
 
 **Web interface not accessible:**
@@ -86,6 +128,7 @@ The system uses FFmpeg with hardware acceleration for efficient streaming on Rad
 **Permission errors:**
 - Run setup script with appropriate permissions
 - Check camera device permissions: `ls -l /dev/video*`
+- For Raspberry Pi: Ensure user is in `video` and `render` groups
 
 ## Development
 
@@ -128,4 +171,4 @@ This project is open source and available under the [MIT License](LICENSE).
 
 ---
 
-**Note**: This application is designed specifically for Radxa single-board computers but may work with other Linux-based systems with camera support.
+**Note**: This application is designed for Radxa and Raspberry Pi single-board computers with hardware acceleration support. It may work with other Linux-based systems but without hardware acceleration optimizations.
